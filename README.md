@@ -115,6 +115,9 @@ Default VISA addresses are set in the code and editable in the interface.
 | Path | Contents |
 | --- | --- |
 | `Transport_all.py` | The application |
+| `transport/core/scan_sequences.py` | Shared, hardware-independent scan axes, round trips and ramp-time estimates |
+| `transport/core/scan_recording.py` | Run folder naming, file safety, CSV and JSON-lines recording |
+| `transport/core/scan_lifecycle.py` | Cross-page close handoffs and scan-end zero-result reporting |
 | `Other-files/test*.py`, `Other-files/test/` | Offline regression tests |
 | `Other-files/README.md` | Dated change log, newest first |
 | `Other-files/docs/` | Generated user manual |
@@ -122,6 +125,16 @@ Default VISA addresses are set in the code and editable in the interface.
 | `Test_Microwave_NH_dev.py` | Standalone fixed-current microwave x modulation grid test (`Other-files/Test_Microwave_NH_dev_README.md`) |
 | `MS-fourState.py` | PPMS state writing and zero-field SR830 read: a cycle such as D-A-B-E-B-A repeated, or a typed sequence, plus manual angle, field and current settings as on the PPMS page; runs on its own, with the main program's instrument code copied in (`Other-files/MS-fourState_README.md`) |
 
+
+### Shared core modules
+
+The first extraction keeps `Transport_all.py` as the single executable and the
+legacy import surface used by the offline tests. The new `transport/core/`
+package contains algorithms and storage/lifecycle infrastructure that do not
+connect to instruments or create Tk windows. `ScanRunRecorder` in the old
+entry point remains a small compatibility subclass so existing monkeypatches
+of `scan_file_stem`, `make_scan_run_folder`, and `scan_log_line` keep working.
+Instrument drivers, scan workers and GUI pages are deliberately unchanged.
 ## Tests
 
 The tests run with no hardware attached. Instrument access is stubbed, so they

@@ -36,10 +36,6 @@ jobs:
       - name: Other-files suite
         working-directory: Other-files
         run: xvfb-run -a -s "-screen 0 2560x1440x24 -dpi 96" python ci/run_suite.py
-      - name: Microwave test program, offline tests
-        if: success() || failure()
-        working-directory: Other-files/microwave_test_support
-        run: python -m unittest test_microwave_transport
       - name: test/ suite
         if: success() || failure()
         working-directory: Other-files/test
@@ -49,18 +45,31 @@ jobs:
       - name: Layout checks and screenshots
         if: success() || failure()
         run: xvfb-run -a -s "-screen 0 2560x1440x24 -dpi 96" python Other-files/ci/gui_checks.py --shots shots
-      - name: Microwave test program, layout and screenshots
-        if: success() || failure()
-        run: xvfb-run -a -s "-screen 0 2560x1440x24 -dpi 96" python Other-files/ci/microwave_checks.py --shots shots/microwave
-      - name: MS-fourState, layout and screenshots
-        if: success() || failure()
-        run: xvfb-run -a -s "-screen 0 2560x1440x24 -dpi 96" python Other-files/ci/ms_four_state_checks.py --shots shots/ms_four_state
       - uses: actions/upload-artifact@v4
         if: success() || failure()
         with:
           name: screenshots-linux
           path: shots
           if-no-files-found: ignore
+      # The modular package (user, 2026-11-01): built from pyproject.toml,
+      # installed with its dependencies into a clean environment, imported
+      # outside the checkout, and kept as an artifact for the release.
+      - name: Package, built and installed
+        if: success() || failure()
+        run: |
+          python -m pip install build
+          python -m build
+          python -m venv "$RUNNER_TEMP/pkg"
+          "$RUNNER_TEMP/pkg/bin/python" -m pip install dist/*.whl
+          cd "$RUNNER_TEMP"
+          xvfb-run -a "$RUNNER_TEMP/pkg/bin/python" -c "import Transport_all, transport.core.scan_recording as r; print(Transport_all.APP_VERSION, Transport_all.run, r.__file__)"
+          test -x "$RUNNER_TEMP/pkg/bin/transport-all"
+      - uses: actions/upload-artifact@v4
+        if: success() || failure()
+        with:
+          name: package
+          path: dist
+          if-no-files-found: error
 
   windows:
     runs-on: windows-latest
@@ -79,10 +88,6 @@ jobs:
       - name: Other-files suite
         working-directory: Other-files
         run: python ci/run_suite.py
-      - name: Microwave test program, offline tests
-        if: success() || failure()
-        working-directory: Other-files/microwave_test_support
-        run: python -m unittest test_microwave_transport
       - name: test/ suite
         if: success() || failure()
         working-directory: Other-files/test
@@ -92,12 +97,6 @@ jobs:
       - name: Layout checks and screenshots
         if: success() || failure()
         run: python Other-files/ci/gui_checks.py --shots shots
-      - name: Microwave test program, layout and screenshots
-        if: success() || failure()
-        run: python Other-files/ci/microwave_checks.py --shots shots/microwave
-      - name: MS-fourState, layout and screenshots
-        if: success() || failure()
-        run: python Other-files/ci/ms_four_state_checks.py --shots shots/ms_four_state
       - uses: actions/upload-artifact@v4
         if: success() || failure()
         with:

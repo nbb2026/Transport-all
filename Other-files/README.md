@@ -1,5 +1,20 @@
 # Magneto-Electro-Optical Transport Experiment Control Directory
 
+## The modular branch as a package, v1.0.2-modular (user, 2026-11-01)
+
+- `modular` holds only the program and what it needs: `Transport_all.py`, the `transport/` package (Jiaze-Li's
+  PR #1), their tests, CI, the manual and this change log. Removed here, kept on `main`: the standalone
+  `Newmark_motor_test.py`, `Avtech_pulse_test.py`, `MS-fourState.py` and `Test_Microwave_NH_dev.py` with their tests,
+  READMEs, copy tool and CI steps; the old V3 Windows build package and its zip; the old icons; the V3 build handoff
+  and the archived notes on early standalone programs; and the standalone instrument scripts and `.nitrace` captures
+  in `test/`.
+- The SHV angle tests ran on the Newmark script's simulated controller; it is now `newmark_simulator.py` (copied
+  unchanged). The Newmark DLL test keeps the program's half; the script's half is on `main`.
+- **Package:** `pyproject.toml` installs `Transport_all.py` and the `transport` package with a `transport-all`
+  command (`run()`, the same start as `python Transport_all.py`). Version `1.0.2+modular` = `APP_VERSION`, so run
+  logs and saved settings say which build wrote them. CI builds it, installs it in a clean environment and keeps the
+  wheel and sdist; `test_package_metadata.py` checks the version, modules and command against the program.
+
 ## Renamed Transport_all.py (user, 2026-10-30)
 
 - The program `Transport_all_NH_dev.py` is now **`Transport_all.py`** (`git mv`, so its history follows), and the

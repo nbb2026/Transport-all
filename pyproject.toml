@@ -1,0 +1,37 @@
+# The modular build of Transport-all as an installable package (user,
+# 2026-11-01): Transport_all.py plus the transport package beside it.
+# `pip install transport_all-<version>-py3-none-any.whl` adds the
+# `transport-all` command; `python Transport_all.py` in a copied folder works
+# as before.  The version follows APP_VERSION in Transport_all.py.
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "transport-all"
+version = "1.0.2+modular"
+description = "Magneto-electro-optical transport measurement control program (Tk GUI) for lab instruments"
+readme = "README.md"
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+# As on the development Mac and in CI.  Instrument libraries that need a
+# vendor install (pco, zhinst for the MFLI, pythonnet for the PPMS) are added
+# on the lab PC as before.
+dependencies = ["numpy", "pillow", "opencv-python", "pyvisa", "pyserial"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: Microsoft :: Windows",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Intended Audience :: Science/Research",
+]
+
+[project.urls]
+Homepage = "https://github.com/nbb2026/Transport-all"
+
+[project.scripts]
+transport-all = "Transport_all:run"
+
+[tool.setuptools]
+py-modules = ["Transport_all"]
+packages = ["transport", "transport.core"]

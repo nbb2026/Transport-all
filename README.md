@@ -10,10 +10,27 @@ Everything runs from one Tkinter application,
 whole shared rack, so one page cannot take an instrument another page is
 already driving, and every source is brought to a safe state on shutdown.
 
+**This is the `modular` branch:** the program plus the `transport/` package
+beside it, published as a Python package. The one-file program, the
+standalone test scripts (Newmark stage, Avtech pulser, MS-fourState,
+microwave test) and the old build packages stay on `main`.
+
 ## Running it
+
+From a copied folder (`Transport_all.py` and the `transport/` folder side by
+side):
 
 ```bash
 python3 Transport_all.py
+```
+
+Or install the package from the
+[release](https://github.com/nbb2026/Transport-all/releases) and start it
+with the `transport-all` command:
+
+```bash
+python -m pip install transport_all-1.0.2+modular-py3-none-any.whl
+transport-all
 ```
 
 Python 3.11 is what the program is developed and tested against. Every
@@ -118,12 +135,11 @@ Default VISA addresses are set in the code and editable in the interface.
 | `transport/core/scan_sequences.py` | Shared, hardware-independent scan axes, round trips and ramp-time estimates |
 | `transport/core/scan_recording.py` | Run folder naming, file safety, CSV and JSON-lines recording |
 | `transport/core/scan_lifecycle.py` | Cross-page close handoffs and scan-end zero-result reporting |
+| `pyproject.toml` | The package: `Transport_all.py`, the `transport` package and the `transport-all` command |
 | `Other-files/test*.py`, `Other-files/test/` | Offline regression tests |
+| `Other-files/newmark_simulator.py` | The simulated Newmark stage controller the SHV tests run on |
 | `Other-files/README.md` | Dated change log, newest first |
 | `Other-files/docs/` | Generated user manual |
-| `Other-files/MEO_Transport_V3_Windows_Build_Package/` | Frozen Windows release |
-| `Test_Microwave_NH_dev.py` | Standalone fixed-current microwave x modulation grid test (`Other-files/Test_Microwave_NH_dev_README.md`) |
-| `MS-fourState.py` | PPMS state writing and zero-field SR830 read: a cycle such as D-A-B-E-B-A repeated, or a typed sequence, plus manual angle, field and current settings as on the PPMS page; runs on its own, with the main program's instrument code copied in (`Other-files/MS-fourState_README.md`) |
 
 
 ### Shared core modules
@@ -156,7 +172,8 @@ On macOS they hang while the display is asleep, because Tk waits for the
 window server; wake it first, or run them under `caffeinate -u`.
 
 The same tests, plus layout checks with a screenshot of each page, run on
-GitHub's Linux and Windows machines on every push to `main`
+GitHub's Linux and Windows machines on every push to `main` and `modular`
+and on pull requests into `modular`
 ([`.github/workflows/gui-tests.yml`](.github/workflows/gui-tests.yml),
 [`Other-files/ci/gui_checks.py`](Other-files/ci/gui_checks.py)). Results and
 screenshots are on the repository's Actions tab. Running them there keeps

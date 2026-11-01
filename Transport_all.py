@@ -259,7 +259,7 @@ def use_english_tk_dialogs(root: tk.Misc) -> bool:
     global _NATIVE_MESSAGE_SHOW
     if hasattr(tk_messagebox, "_show"):
         # tkinter's own _show, kept once per process on tkinter.messagebox:
-        # MS-fourState.py and Test_Microwave_NH_dev.py carry copies of this
+        # MS-fourState.py and Test_Microwave_NH_dev.py (on main) carry copies of this
         # code, and two copies in one process (the tests) must not each keep
         # the other's box as their standard one.
         native = getattr(tk_messagebox, "_english_native_show", None)
@@ -1556,7 +1556,7 @@ class LabOneCAPIAdapter:
             self._destroy()
 
 
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.2+modular"
 APPLICATION_NAME = "Magneto-Electro-Optical-Microwave Transport"
 WINDOW_TITLE_SUFFIX = "-NH & Prof Chen's group"
 MAIN_WINDOW_TITLE = "Magneto_Electro_Optical_Microwave_Transport_NH"
@@ -1961,7 +1961,7 @@ K6221_MIN_COMPLIANCE_V = 0.1
 K6221_MAX_COMPLIANCE_V = 105.0
 # CIDWM (was MOKE-6221) pulse output defaults (user's figure, 2026-10-12; were 1 mA,
 # 10 us and 50 V).  The controller's own start values stay as they were:
-# MS-fourState.py copies them.
+# MS-fourState.py (on main) copies them.
 K6221_DEFAULT_CURRENT_MA = 3.0  # user's figure, 2026-10-20 (was 2)
 K6221_OUTPUT_PULSE_WIDTH_US = 50.0
 K6221_OUTPUT_COMPLIANCE_V = 100.0
@@ -39175,7 +39175,7 @@ class CombinedControlApp:
         then OUTP? read back (user, 2026-10-18: every scan end reads back
         where the instrument allows).  The readback decides: a failed write
         whose OUTP? is 0 is logged, not raised; anything else raises.  Here,
-        not in Keithley6221Controller, whose code MS-fourState.py copies."""
+        not in Keithley6221Controller, whose code MS-fourState.py (on main) copies."""
         with controller.lock:
             failure = None
             try:
@@ -50975,7 +50975,7 @@ def create_motor_subsystem():
     """Standalone TUOTUO MOKE cell-stage controller reconstructed from NI traces.
     
     The protocol mapping in this file is based on the operator-labelled capture
-    ``test/Motor_COM4_2.nitrace``:
+    ``test/Motor_COM4_2.nitrace`` (kept on main):
     
         Init ON -> Home -> Down 2000 um x 6 -> absolute 7250 um
         -> Home -> Init OFF -> stop LabVIEW
@@ -57310,7 +57310,13 @@ def run_pco_dll_self_test() -> int:
     return exit_code
 
 
-if __name__ == "__main__":
+def run() -> None:
+    """Start as `python Transport_all.py` does; the installed `transport-all`
+    command runs this too (user, 2026-11-01: the modular package)."""
     if PCO_DLL_SELF_TEST_SWITCH in sys.argv:
         raise SystemExit(run_pco_dll_self_test())
     main()
+
+
+if __name__ == "__main__":
+    run()

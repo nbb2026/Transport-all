@@ -1,8 +1,8 @@
 """RT-E Angle scan with the Newmark NSC-A1 rotation stage (user, 2026-10-13).
 
 The program's NewmarkNSCA1Controller runs on a fake PerformaxCom.dll: the
-reviewed simulated controller of Newmark_motor_test.py (its
-SimulatedPerformax answers the DLL's calls with the same ctypes buffers),
+reviewed simulated controller of Newmark_motor_test.py, kept in
+newmark_simulator.py on the modular branch (its SimulatedPerformax answers the DLL's calls with the same ctypes buffers),
 wrapped so that every call records the thread it came from.  No real DLL is
 ever loaded (also on the Windows CI, where ctypes.WinDLL exists: it,
 os.add_dll_directory and the program's loader are replaced for the whole
@@ -15,7 +15,6 @@ import ast
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import ExitStack
 import ctypes
-import importlib.util
 import inspect
 import os
 from pathlib import Path
@@ -31,10 +30,7 @@ import test_rte_panel as rte_tests
 from test_ppms_motor_debug import app
 from test_ppms_two_panels import ImmediateExecutor, Var
 
-SCRIPT = Path(__file__).resolve().parents[1] / "Newmark_motor_test.py"
-_spec = importlib.util.spec_from_file_location("newmark_motor_test_for_rte", SCRIPT)
-script = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(script)
+import newmark_simulator as script
 
 REAL_LOADER = app.newmark_load_performax     # before the module guard replaces the name
 _guards = []
@@ -457,7 +453,7 @@ class NewmarkDriverTests(StageBase):
 
     def test_the_microstep_is_250_with_its_source(self):
         self.assertEqual(app.NEWMARK_MICROSTEP, 250)
-        self.assertEqual(app.NEWMARK_MICROSTEP, script.MICROSTEP, "the program and the script agree")
+        self.assertEqual(app.NEWMARK_MICROSTEP, script.MICROSTEP, "the program and the simulator agree")
         self.assertEqual(app.NEWMARK_STEPS_PER_DEGREE, 40 * app.NEWMARK_MICROSTEP)
         self.assertEqual(app.NEWMARK_STEPS_PER_DEGREE, 10000)
         self.assertEqual(app.NewmarkNSCA1Controller(lambda _text: None).steps_per_degree, 10000)

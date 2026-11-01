@@ -6,7 +6,12 @@ name: GUI tests
 
 on:
   push:
-    branches: [main, "ci/**"]
+    branches: [main, modular, "ci/**"]
+  # Pull requests into modular, the multi-file branch (user, 2026-11-01).
+  # "edited" also runs one when its base is changed to modular.
+  pull_request:
+    branches: [modular]
+    types: [opened, synchronize, reopened, edited]
   workflow_dispatch:
 
 env:

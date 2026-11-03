@@ -34,4 +34,4 @@ transport-all = "Transport_all:run"
 
 [tool.setuptools]
 py-modules = ["Transport_all"]
-packages = ["transport", "transport.core"]
+packages = ["transport", "transport.core", "transport.ppms"]

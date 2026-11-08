@@ -57,6 +57,12 @@ from transport.ppms.protocol import (
     validate_ppms_temperature_command,
 )
 from transport.ppms.controllers.multivu import PPMSMultiVuReadbackController
+from transport.common.settling import (
+    DEFAULT_LOCKIN_SETTLE_TAUS,
+    calculate_lockin_settle_s,
+    format_lockin_settle_text,
+    format_settle_status_text,
+)
 
 
 # Tk's own message boxes and file dialogs in place of the Windows ones (user,
@@ -7982,12 +7988,7 @@ def ppms_lockin_settle_s(settle_s, time_constants_s) -> float:
     in binary, under the earlier 7 x TC rule) reads 0.7 in the CSV's
     effective_settle_s, as the Start confirmation does (user, 2026-10-14).
     The shortest SR830 wait, 10 us, keeps every digit."""
-    slowest = 0.0
-    for value in time_constants_s:
-        tau = float(value)
-        if math.isfinite(tau) and tau > slowest:
-            slowest = tau
-    return round(max(float(settle_s), LOCKIN_SETTLE_TAUS * slowest), 12)
+    return calculate_lockin_settle_s(settle_s, time_constants_s, settle_taus=LOCKIN_SETTLE_TAUS)
 
 
 def ppms_settle_status_text(seconds) -> str:
@@ -7997,21 +7998,13 @@ def ppms_settle_status_text(seconds) -> str:
     a small Zurich TC gave six digits and widened the RT-E status line past
     the label, which then cut its end with an ellipsis.  The CSV and the log
     keep the exact value (user, 2026-10-14)."""
-    seconds = float(seconds)
-    return f"{seconds:.0f}" if seconds >= 100 else f"{seconds:.3g}"
+    return format_settle_status_text(seconds)
 
 
 def ppms_lockin_settle_text(settle_s, effective_s, slowest_tc_s, meter) -> str:
     """How the PPMS / RT-E wait before each reading was chosen, in words for
     the Start confirmation and the log (user, 2026-10-14)."""
-    if not slowest_tc_s:
-        return f"{effective_s:g} s (Settle s)"
-    rule_s = LOCKIN_SETTLE_TAUS * slowest_tc_s
-    if effective_s > settle_s:
-        return (f"{effective_s:g} s ({LOCKIN_SETTLE_TAUS:g} x {slowest_tc_s:g} s, the time constant of "
-                f"{meter}, the slowest lock-in measured; Settle s is {settle_s:g} s)")
-    return (f"{effective_s:g} s (Settle s; {LOCKIN_SETTLE_TAUS:g} x the slowest lock-in time constant, "
-            f"{slowest_tc_s:g} s on {meter}, is {rule_s:g} s)")
+    return format_lockin_settle_text(settle_s, effective_s, slowest_tc_s, meter, settle_taus=LOCKIN_SETTLE_TAUS)
 
 
 def validate_ppms_transport_scan_settings(

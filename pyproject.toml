@@ -36,6 +36,7 @@ transport-all = "Transport_all:run"
 py-modules = ["Transport_all"]
 packages = [
     "transport",
+    "transport.common",
     "transport.core",
     "transport.ppms",
     "transport.ppms.controllers",

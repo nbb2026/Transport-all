@@ -39,6 +39,20 @@ class Clock:
     def __call__(self): return self.now
 
 
+class FakeRoot:
+    """Minimal fake Tk root that records scheduled after callbacks instead of executing them recursively."""
+
+    def __init__(self):
+        self.after_calls = []
+
+    def after(self, delay_ms, callback, *args):
+        self.after_calls.append((delay_ms, callback, args))
+        return f"after#{len(self.after_calls)}"
+
+    def after_cancel(self, _token):
+        pass
+
+
 def reading(field, status):
     return dict(field_oe=float(field), field_status=status, temperature_k=300., temperature_status="Stable")
 
@@ -247,6 +261,7 @@ class PersistentSetpointTests(unittest.TestCase):
         for op, args, ended in (("TEMP", (10., 1., 0), False), ("FIELD", (0., 100., 0, 1), True)):
             with self.subTest(op=op):
                 panel = self.make_panel()
+                panel.root = FakeRoot()
                 self.press(panel, panel.set_ppms_field, (0, "StablePersistent"))
                 panel.ppms_macro_stop = threading.Event()
                 panel.ppms_macro_commands = iter([(1, op, args)])
@@ -261,6 +276,7 @@ class PersistentSetpointTests(unittest.TestCase):
                 panel._ppms_macro_next()
                 self.assertEqual(panel.ppms_persistent_watch is None, ended)
                 self.assertEqual(panel.ppms_connection_var.get(), MACRO_TOOK_OVER if ended else GOING)
+                self.assertEqual(panel.root.after_calls, [(0, panel._ppms_macro_next, ())])
 
     def test_the_scan_clean_up_zeroing_ends_the_follow_up(self):
         # Also reached by "I off" during a Temperature, Angle or Current scan.

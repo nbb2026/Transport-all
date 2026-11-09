@@ -57,6 +57,15 @@ from transport.ppms.protocol import (
     validate_ppms_temperature_command,
 )
 from transport.ppms.controllers.multivu import PPMSMultiVuReadbackController
+from transport.common.harmonics import (
+    DEFAULT_HARMONIC_CHOICES,
+    DEFAULT_HARMONIC_LABELS,
+    DEFAULT_HARMONIC_MODE_ORDERS,
+    DEFAULT_HARMONIC_ORDERS,
+    DEFAULT_SR830_HARMONIC_SETTING_KEYS,
+    parse_harmonic_mode,
+    schedule_harmonic_passes,
+)
 from transport.common.settling import (
     DEFAULT_LOCKIN_SETTLE_TAUS,
     calculate_lockin_settle_s,
@@ -2247,10 +2256,10 @@ PPMS_SR830_RANGE_LIMIT_STEPS = 36
 PPMS_FIRST_POINT_MAX_WINDOWS = 10
 PPMS_FIRST_POINT_TOLERANCE_FRACTION = 0.02
 PPMS_FIRST_POINT_FLOOR_FRACTION = 0.002
-PPMS_HARMONIC_ORDERS = (1, 2, 3)
-PPMS_HARMONIC_LABELS = {1: "1st harmonic", 2: "2nd harmonic", 3: "3rd harmonic"}
+PPMS_HARMONIC_ORDERS = DEFAULT_HARMONIC_ORDERS
+PPMS_HARMONIC_LABELS = dict(DEFAULT_HARMONIC_LABELS)
 PPMS_METER_COLORS = {"830_a": "#0072B2", "830_b": "#E69F00", "830_c": "#009E73", "zurich": "#CC79A7"}
-PPMS_ZURICH_MODE_ORDERS = {"1": (1,), "2": (2,), "3": (3,), "1+2": (1, 2), "1+2+3": (1, 2, 3)}
+PPMS_ZURICH_MODE_ORDERS = dict(DEFAULT_HARMONIC_MODE_ORDERS)
 # The Zurich's time constant on the PPMS and RT-E pages ("Time constant s" /
 # "TC (s)"): 1 s by default, as every lock-in time constant the program starts
 # with, so all pages agree unless a box is changed (user, 2026-10-14; the box
@@ -2322,7 +2331,7 @@ PPMS_ZURICH_LOCK_READS = 3
 # SR830 slots accept the same selections as the Zurich: a multi-order choice
 # runs one scan pass per order, with the meter re-tuned between passes.
 PPMS_HARMONIC_MODE_ORDERS = PPMS_ZURICH_MODE_ORDERS
-PPMS_HARMONIC_CHOICES = (1, 2, 3, "1+2", "1+2+3")
+PPMS_HARMONIC_CHOICES = DEFAULT_HARMONIC_CHOICES
 NONLOCAL_MFLI_API_LEVEL = 5
 # What NonLocalACController calls on its MFLI session (mfli_daq) once it is
 # connected: an adapter without one of them is not used (review, 2026-10-18).
@@ -2721,7 +2730,7 @@ PPMS_SR830_HARMONIC_ATTRS = {
     "830_b": "ppms_transport_harmonic_b_var",
     "830_c": "ppms_transport_harmonic_c_var",
 }
-PPMS_SR830_HARMONIC_SETTING_KEYS = {"830_a": "harmonic_a", "830_b": "harmonic_b", "830_c": "harmonic_c"}
+PPMS_SR830_HARMONIC_SETTING_KEYS = dict(DEFAULT_SR830_HARMONIC_SETTING_KEYS)
 # SR830 external-reference slope on the PPMS page: 1 = TTL rising edge, which
 # matches the 6221 phase marker as wired on the PPMS bench (RSLP 0 = sine,
 # 2 = TTL falling).
@@ -20177,9 +20186,7 @@ class CombinedControlApp:
         """Harmonic orders this SR830 measures, one per scan pass."""
         variable = self._ppms_harmonic_var(key)
         value = str(variable.get()).strip() if variable is not None else "1"
-        if value not in PPMS_HARMONIC_MODE_ORDERS:
-            raise ValueError("Select harmonic 1, 2, 3, 1+2 or 1+2+3")
-        return PPMS_HARMONIC_MODE_ORDERS[value]
+        return parse_harmonic_mode(value, mode_orders=PPMS_HARMONIC_MODE_ORDERS)
 
     def _ppms_harmonic_value(self, key: str, default: int = 1) -> int:
         """The order measured in the first pass."""
@@ -20191,19 +20198,25 @@ class CombinedControlApp:
     def _ppms_harmonic_passes(self, settings):
         """One settings dict per pass; a meter drops out once its orders end."""
         schedules = {key: self._ppms_harmonic_orders(key) for key in settings["active_lockins"]}
-        passes = []
-        for index in range(max((len(orders) for orders in schedules.values()), default=1)):
-            config = dict(settings, harmonic_pass=index + 1)
-            config["active_lockins"] = tuple(k for k, orders in schedules.items() if index < len(orders))
-            for key in config["active_lockins"]:
-                config[PPMS_SR830_HARMONIC_SETTING_KEYS[key]] = schedules[key][index]
+
+        def validate_pass(config):
             validate_ppms_transport_scan_settings(
-                config["current_rms_ma"], config["frequency_hz"], config["compliance_v"],
-                config["harmonic_a"], config["harmonic_b"], config["active_lockins"],
+                config["current_rms_ma"],
+                config["frequency_hz"],
+                config["compliance_v"],
+                config["harmonic_a"],
+                config["harmonic_b"],
+                config["active_lockins"],
                 allow_no_lockins=bool(config.get("allow_no_lockins", False)),
-                harmonic_c=config["harmonic_c"])
-            passes.append(config)
-        return passes
+                harmonic_c=config["harmonic_c"],
+            )
+
+        return schedule_harmonic_passes(
+            settings,
+            schedules,
+            validator=validate_pass,
+            harmonic_setting_keys=PPMS_SR830_HARMONIC_SETTING_KEYS,
+        )
 
     def _ppms_selected_lockins(self):
         selections = getattr(self, 'ppms_lockin_selection', {})

@@ -72,6 +72,9 @@ from transport.common.settling import (
     format_lockin_settle_text,
     format_settle_status_text,
 )
+from transport.common.validation import (
+    validate_transport_scan_settings,
+)
 
 
 # Tk's own message boxes and file dialogs in place of the Windows ones (user,
@@ -8027,57 +8030,20 @@ def validate_ppms_transport_scan_settings(
     harmonic_c: int = 1,
 ) -> dict[str, object]:
     """Validate 6221/SR830 settings used by the PPMS field scan."""
-    current_rms_ma = float(current_rms_ma)
-    frequency_hz = float(frequency_hz)
-    compliance_v = float(compliance_v)
-    harmonic_a = int(harmonic_a)
-    harmonic_b = int(harmonic_b)
-    harmonic_c = int(harmonic_c)
-    active_lockins = tuple(str(key) for key in active_lockins)
-    if not active_lockins and not allow_no_lockins:
-        raise ValueError("PPMS field sweep requires at least one connected SR830")
-    if any(key not in PPMS_SR830_KEYS for key in active_lockins):
-        raise ValueError("PPMS SR830 slot is invalid")
-    if not all(
-        math.isfinite(value)
-        for value in (current_rms_ma, frequency_hz, compliance_v)
-    ):
-        raise ValueError("6221 parameters for the PPMS transport scan must be finite values")
-    if current_rms_ma <= 0:
-        raise ValueError("6221 AC current for the PPMS transport scan must be greater than 0 mA RMS")
-    peak_a = math.sqrt(2.0) * current_rms_ma * 1e-3
-    if peak_a > K6221_MAX_ABS_CURRENT_A:
-        maximum_rms_ma = K6221_MAX_ABS_CURRENT_A / math.sqrt(2.0) * 1000.0
-        raise ValueError(
-            f"6221 sine-wave peak must not exceed {K6221_MAX_ABS_CURRENT_A * 1000:g} mA; "
-            f"the GUI RMS current limit is about {maximum_rms_ma:.6g} mA"
-        )
-    if not 1e-3 <= frequency_hz <= 1e5:
-        raise ValueError("6221 waveform frequency must be within 0.001–100000 Hz")
-    if not K6221_MIN_COMPLIANCE_V <= compliance_v <= K6221_MAX_COMPLIANCE_V:
-        raise ValueError(
-            f"6221 compliance voltage must be within {K6221_MIN_COMPLIANCE_V:g}–"
-            f"{K6221_MAX_COMPLIANCE_V:g} V"
-        )
-    harmonics = {"830_a": harmonic_a, "830_b": harmonic_b, "830_c": harmonic_c}
-    for key in active_lockins:
-        label = {"830_a": "A", "830_b": "B", "830_c": "C"}[key]
-        harmonic = harmonics[key]
-        if not 1 <= harmonic <= 19999:
-            raise ValueError(f"SR830 slot {label} harmonic must be within 1–19999")
-        if frequency_hz * harmonic > 102000.0:
-            raise ValueError(f"SR830 slot {label} demodulation frequency must not exceed 102 kHz")
-    return {
-        "current_rms_ma": current_rms_ma,
-        "frequency_hz": frequency_hz,
-        "compliance_v": compliance_v,
-        "harmonic_a": harmonic_a,
-        "harmonic_b": harmonic_b,
-        "harmonic_c": harmonic_c,
-        "active_lockins": active_lockins,
-        "allow_no_lockins": allow_no_lockins,
-        "peak_a": peak_a,
-    }
+    return validate_transport_scan_settings(
+        current_rms_ma,
+        frequency_hz,
+        compliance_v,
+        harmonic_a,
+        harmonic_b,
+        active_lockins=active_lockins,
+        allow_no_lockins=allow_no_lockins,
+        harmonic_c=harmonic_c,
+        max_abs_current_a=K6221_MAX_ABS_CURRENT_A,
+        min_compliance_v=K6221_MIN_COMPLIANCE_V,
+        max_compliance_v=K6221_MAX_COMPLIANCE_V,
+        valid_sr830_keys=PPMS_SR830_KEYS,
+    )
 
 
 class Keithley2410Controller:

@@ -8,7 +8,8 @@
   window, the Transport icon. Before uploading it checks the .exe: `--package-self-test` (below), the program's own
   `--pco-dll-self-test`, and a start up to the main window (screenshot in the artifact `exe-checks`). The artifact
   `Transport_all-windows-x64` holds the .exe, its SHA-256 and `BUILD_INFO.txt` (commit, version, package versions),
-  kept 90 days. Only `Transport_all.py` is built: MS-fourState.py, Test_Microwave_NH_dev.py, Avtech_pulse_test.py
+  kept 90 days; the `.sha256` file has a plain `\n` line end, so `shasum -a 256 -c` reads it on a Mac too
+  (it had a Windows line end in the first build). Only `Transport_all.py` is built: MS-fourState.py, Test_Microwave_NH_dev.py, Avtech_pulse_test.py
   and Newmark_motor_test.py are bench tools run from source. The Nuitka build package of 2026-08
   (`MEO_Transport_V3_Windows_Build_Package`) stays as history.
 - **`requirements.txt`** (new): the versions of the last build verified on the lab PC (docs/HANDOFF_BUILD_AND_RELEASE.md,

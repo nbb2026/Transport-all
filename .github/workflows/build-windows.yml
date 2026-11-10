@@ -55,7 +55,8 @@ jobs:
         run: |
           $exe = Get-Item dist/Transport_all.exe
           $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
-          "$hash  Transport_all.exe" | Set-Content -Encoding ascii dist/Transport_all.exe.sha256
+          # A plain \n line end, so `shasum -a 256 -c` also reads it on a Mac.
+          Set-Content -NoNewline -Encoding ascii dist/Transport_all.exe.sha256 -Value "$hash  Transport_all.exe`n"
           $version = (Select-String -Path Transport_all.py -Pattern '^APP_VERSION = "(.+)"').Matches[0].Groups[1].Value
           $info = @(
             "Transport_all.exe, program version $version",

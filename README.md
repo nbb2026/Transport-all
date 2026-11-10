@@ -49,7 +49,8 @@ be started by hand with Run workflow.
 **Install.** Unzip into a folder you keep, such as `C:\Transport_all\`, not
 Downloads: the results folders (`Transport_all_<page>_Results`) are made
 beside the .exe, as they are beside the .py. Check the file if you like:
-`certutil -hashfile Transport_all.exe SHA256` must print the SHA-256 in the zip.
+`certutil -hashfile Transport_all.exe SHA256` must print the SHA-256 in the zip
+(on a Mac: `shasum -a 256 -c Transport_all.exe.sha256`).
 
 **Run.** Double-click `Transport_all.exe`. It unpacks itself on each start,
 so the window takes a few seconds longer to appear than the .py's. The .exe

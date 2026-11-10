@@ -64,6 +64,7 @@ if "--package-self-test" in sys.argv:
         ("zhinst.core", lambda: _imported("zhinst.core")),
         ("zhinst.utils", lambda: _imported("zhinst.utils")),
         ("pythonnet", _dotnet),
+        ("pywin32", lambda: _imported("win32com.client", "pythoncom", "pywintypes")),
         ("MultiPyVu", lambda: _imported("MultiPyVu")),
     )
     lines = [f"Transport_all package self-test: {sys.executable}"]

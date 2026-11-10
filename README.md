@@ -55,11 +55,11 @@ beside the .exe, as they are beside the .py. Check the file if you like:
 so the window takes a few seconds longer to appear than the .py's. The .exe
 is not code-signed: Windows SmartScreen may say "Windows protected your PC"
 (More info, then Run anyway), and antivirus may hold it until IT allows it.
-The .exe holds every Python package, but the instrument drivers stay outside
-it, as for the .py: NI-VISA and the GPIB driver, the PCO camera driver,
-Thorlabs Kinesis, LabOne, MultiVu/QDInstrument, and the DLLs that sit beside
-the program (`PerformaxCom.dll` and `SiUSBXp.dll` for the Newmark stage) go
-beside the .exe. An MFLI on LabOne 18.12 still needs the Python 3.7 bridge from
+The .exe holds every Python package but not the instrument drivers, which are
+installed as for the .py: NI-VISA and the GPIB driver, the PCO camera driver,
+Thorlabs Kinesis, LabOne and MultiVu/QDInstrument. DLLs kept beside the .py
+(`PerformaxCom.dll` and `SiUSBXp.dll` for the Newmark stage) go beside the
+.exe. An MFLI on LabOne 18.12 still needs the Python 3.7 bridge from
 `Other-files/INSTALL_MFLI_LABONE_18_12.bat`.
 
 **Update.** Close the program, download the newest artifact and replace

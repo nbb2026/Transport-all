@@ -13,6 +13,7 @@
 # (NI-VISA and GPIB, PCO camera driver, Thorlabs Kinesis, LabOne, MultiVu /
 # QDInstrument, Newmark PerformaxCom.dll), as for the .py program.
 
+import sysconfig
 from pathlib import Path
 
 from PyInstaller.utils.hooks import (
@@ -49,6 +50,9 @@ multipyvu_datas, multipyvu_binaries, multipyvu_imports = collect_all("MultiPyVu"
 datas += multipyvu_datas
 binaries += multipyvu_binaries
 hiddenimports += multipyvu_imports
+# MultiPyVu refuses to import unless it finds pywin32.version.txt in
+# site-packages (sysconfig "platlib"), which inside the .exe is Lib/site-packages.
+datas.append((str(Path(sysconfig.get_path("platlib")) / "pywin32.version.txt"), "Lib/site-packages"))
 
 a = Analysis(
     # package_self_test.py runs first and does nothing unless the .exe is

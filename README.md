@@ -40,17 +40,22 @@ Every push to `main` also builds the whole program as one Windows file,
 `Transport_all.exe`, which runs on Windows 10/11 (64-bit) without Python or any
 package installed ([`.github/workflows/build-windows.yml`](.github/workflows/build-windows.yml)).
 
-**Download.** On GitHub (signed in): Actions, then "Windows exe", then the
-newest green run on `main`, then under Artifacts `Transport_all-windows-x64`.
-The zip holds `Transport_all.exe`, its SHA-256 and `BUILD_INFO.txt` (commit,
-program version, package versions). Artifacts are kept for 90 days; a run can
-be started by hand with Run workflow.
+**Download.** Releases, then the pre-release "Windows exe (newest main)", then
+`Transport_all.exe`; or directly
+<https://github.com/nbb2026/Transport-all/releases/download/windows-exe/Transport_all.exe>.
+No sign-in is needed. After every push to `main` whose build passes its checks,
+the workflow replaces the .exe there; the release notes give its commit and
+SHA-256, and `BUILD_INFO.txt` beside it the package versions. Each build is
+also kept as an Actions artifact (signed in, 90 days): Actions, then
+"Windows exe", then the run, then `Transport_all-windows-x64`. A build can be
+started by hand with Run workflow.
 
-**Install.** Unzip into a folder you keep, such as `C:\Transport_all\`, not
-Downloads: the results folders (`Transport_all_<page>_Results`) are made
-beside the .exe, as they are beside the .py. Check the file if you like:
-`certutil -hashfile Transport_all.exe SHA256` must print the SHA-256 in the zip
-(on a Mac: `shasum -a 256 -c Transport_all.exe.sha256`).
+**Install.** Put `Transport_all.exe` in a folder you keep, such as
+`C:\Transport_all\`, not Downloads: the results folders
+(`Transport_all_<page>_Results`) are made beside the .exe, as they are beside
+the .py. Check the file if you like: `certutil -hashfile Transport_all.exe SHA256`
+must print the SHA-256 in the release notes (on a Mac, with the `.sha256` file
+beside it: `shasum -a 256 -c Transport_all.exe.sha256`).
 
 **Run.** Double-click `Transport_all.exe`. It unpacks itself on each start,
 so the window takes a few seconds longer to appear than the .py's. The .exe
@@ -63,8 +68,8 @@ Thorlabs Kinesis, LabOne and MultiVu/QDInstrument. DLLs kept beside the .py
 .exe. An MFLI on LabOne 18.12 still needs the Python 3.7 bridge from
 `Other-files/INSTALL_MFLI_LABONE_18_12.bat`.
 
-**Update.** Close the program, download the newest artifact and replace
-`Transport_all.exe`; the results folders beside it are not touched.
+**Update.** Close the program, download `Transport_all.exe` again from the
+release and replace the old one; the results folders beside it are not touched.
 
 **Check.** `Transport_all.exe --package-self-test` loads every library inside
 the .exe without opening the program and writes the result to

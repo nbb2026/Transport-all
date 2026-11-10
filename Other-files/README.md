@@ -2,6 +2,14 @@
 
 ## Windows .exe built by GitHub Actions (user, 2026-11-10)
 
+- **Release "Windows exe (newest main)"** (user, 2026-11-10: wanted the .exe under the repository's Packages; GitHub
+  Packages holds only registry packages with no download button, so a release instead): a pre-release on the tag
+  `windows-exe`, made once by the owner, so v1.0.2 stays Latest. The workflow's `release` job (main only, after the
+  build job passed every check; `contents: write` in that job only) replaces `Transport_all.exe`, its `.sha256` and
+  `BUILD_INFO.txt` there and rewrites the notes (commit, run, SHA-256). It never moves the tag (tags stay owner-only),
+  so the release's "Source code" files are the tag's commit, as the notes say. Direct link:
+  `https://github.com/nbb2026/Transport-all/releases/download/windows-exe/Transport_all.exe`. Build concurrency is now
+  per job: a newer push still cancels an older build, but a release update is never cut off half-way.
 - **Workflow** `.github/workflows/build-windows.yml` ("Windows exe"): on every push to `main` (and `ci/**`), or by
   hand (Run workflow), a Windows runner installs `requirements.txt` with Python 3.11 x64 and builds
   `Transport_all.exe` with PyInstaller 6.22.3 from `Other-files/packaging/Transport_all.spec`: one file, no console

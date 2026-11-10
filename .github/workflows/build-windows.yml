@@ -2,7 +2,10 @@
 # 10/11, 64-bit) that runs without Python or any package installed.  Runs on
 # every push to main (and to ci/** test branches), or by hand: Actions tab ->
 # "Windows exe" -> Run workflow.  The .exe is attached to the run as the
-# artifact "Transport_all-windows-x64" (open the run, then Artifacts).
+# artifact "Transport_all-windows-x64" (open the run, then Artifacts).  A build
+# of main also replaces the .exe of the pre-release "Windows exe (newest main)"
+# (tag windows-exe, made once by the owner; this workflow never moves the tag),
+# so it can be downloaded directly, without signing in, from the Releases page.
 #
 # Before uploading, the .exe is checked on the runner: it loads every library
 # it bundles (--package-self-test), loads the PCO DLLs (--pco-dll-self-test),
@@ -18,19 +21,19 @@ on:
 permissions:
   contents: read
 
-# A newer push to the same branch replaces a build still running.
-concurrency:
-  group: windows-exe-${{ github.ref }}
-  cancel-in-progress: true
-
 env:
   PYTHONIOENCODING: utf-8
   PYTHONUTF8: "1"
+  RELEASE_TAG: windows-exe
 
 jobs:
   build:
     runs-on: windows-latest
     timeout-minutes: 40
+    # A newer push to the same branch replaces a build still running.
+    concurrency:
+      group: windows-exe-build-${{ github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -133,3 +136,48 @@ jobs:
             dist/*_self_test.txt
             build/Transport_all/warn-Transport_all.txt
           if-no-files-found: ignore
+
+  # Only a build of main that passed every check above gets here.
+  release:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    # One at a time and never cut off half-way, so the newest build is last.
+    concurrency:
+      group: windows-exe-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Transport_all-windows-x64
+          path: dist
+      - name: Replace the .exe in the release "Windows exe (newest main)"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          sha256=$(cut -d' ' -f1 dist/Transport_all.exe.sha256)
+          version=$(sed -n 's/^Transport_all.exe, program version //p' dist/BUILD_INFO.txt | tr -d '\r')
+          tag_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)
+          cat > notes.md <<EOF
+          \`Transport_all.exe\`: the whole program for Windows 10/11 (64-bit), no Python needed. It is
+          rebuilt from the newest \`main\` and replaced here after every push that passes its checks.
+
+          - Commit: [\`${GITHUB_SHA:0:7}\`]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA), program version $version
+          - Built: $(date -u '+%Y-%m-%d %H:%M') UTC, [run $GITHUB_RUN_ID]($RUN_URL)
+          - SHA-256: \`$sha256\`
+
+          Put it in a folder you keep (the results folders are made beside it) and double-click it.
+          Instrument drivers are still needed; see the README's "Windows .exe" section.
+
+          The "Source code" files below are GitHub's snapshot of the tag \`$RELEASE_TAG\`
+          (commit ${tag_commit:0:7}), which does not move; the .exe is from the commit above.
+          EOF
+          gh release upload "$RELEASE_TAG" dist/Transport_all.exe dist/Transport_all.exe.sha256 dist/BUILD_INFO.txt \
+            --clobber --repo "$GITHUB_REPOSITORY"
+          gh release edit "$RELEASE_TAG" --notes-file notes.md --repo "$GITHUB_REPOSITORY"
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[] | "\(.name)  \(.size) bytes"'

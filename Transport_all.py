@@ -1542,6 +1542,19 @@ MAIN_WINDOW_TITLE = "Magneto_Electro_Optical_Microwave_Transport_NH"
 APPLICATION_ICON_BASENAME = "Magneto_Electro_Optical_Microwave_Transport_NH"
 
 
+def program_directory() -> Path:
+    """The folder the program was started from: beside this .py file, or
+    beside the .exe of a one-file build (PyInstaller or Nuitka).  In such a
+    build __file__ is inside a temporary folder that is deleted when the
+    program exits, so results must never default to it."""
+    frozen = getattr(sys, "frozen", False) or "__compiled__" in globals()
+    return Path(sys.argv[0] if frozen else __file__).resolve().parent
+
+
+# Default save folders start here (Windows .exe build, user, 2026-11-10).
+PROGRAM_DIRECTORY = program_directory()
+
+
 def _application_asset_path(filename: str) -> Path | None:
     """Locate a project/runtime asset in source and compiled applications."""
 
@@ -1775,7 +1788,7 @@ MAGNET_FIELD_RE = re.compile(
 )
 MAGNET_CHECKSUM_RE = re.compile(r"<[0-9A-Fa-f]{2}>")
 MAGNET_SCAN_RESULTS_DIRECTORY = (
-    Path(__file__).resolve().parent / f"{Path(__file__).stem}_MOKE_Field_Results"
+    PROGRAM_DIRECTORY / f"{Path(__file__).stem}_MOKE_Field_Results"
 )
 
 
@@ -1918,7 +1931,7 @@ KEITHLEY_RES_WINDOW_S = 20.0
 KEITHLEY_RES_SAMPLE_INTERVAL_S = 0.2
 KEITHLEY_RES_NPLC = 1.0
 KEITHLEY_RESULTS_DIRECTORY = (
-    Path(__file__).resolve().parent / f"{Path(__file__).stem}_2410_Results"
+    PROGRAM_DIRECTORY / f"{Path(__file__).stem}_2410_Results"
 )
 # The MOKE-24 voltage scan's columns: Save CSV's, and since 2026-10-18 (user:
 # "live CSV like CIDWM") also the run folder's live CSV, in this order.
@@ -1992,7 +2005,7 @@ CIDWM_SCAN_FRAME_TIMEOUT_S = 10.0
 # saved too, user 2026-10-12); a hidden Camera Live draws nothing.
 CIDWM_SCAN_DISPLAY_TIMEOUT_S = 3.0
 CIDWM_SCAN_DIRECTORY = (
-    Path(__file__).resolve().parent / f"{Path(__file__).stem}_CIDWM_Results"
+    PROGRAM_DIRECTORY / f"{Path(__file__).stem}_CIDWM_Results"
 )
 # The pulse sign scan's CSV columns per pulse source, unchanged since the run
 # folder's live CSV moved to the shared recorder (user, 2026-10-18), but for
@@ -2334,7 +2347,7 @@ NONLOCAL_SR830_FULL_SCALE_V = (
     200e-3, 500e-3, 1.0,
 )
 NONLOCAL_RESULTS_DIRECTORY = (
-    Path(__file__).resolve().parent / f"{Path(__file__).stem}_NonLocal_IV_Results"
+    PROGRAM_DIRECTORY / f"{Path(__file__).stem}_NonLocal_IV_Results"
 )
 
 # Non-local VI: apply a short Keithley 2410 voltage pulse, turn that source fully
@@ -2440,7 +2453,7 @@ NONLOCAL_VI_RES_AVERAGE_S = 5.0
 NONLOCAL_VI_RES_MAX_S = 30.0
 NONLOCAL_VI_RES_NPLC = KEITHLEY_RES_NPLC
 NONLOCAL_VI_RESULTS_DIRECTORY = (
-    Path(__file__).resolve().parent / f"{Path(__file__).stem}_NonLocal_VI_Results"
+    PROGRAM_DIRECTORY / f"{Path(__file__).stem}_NonLocal_VI_Results"
 )
 # The Non-local page also measures |R| vs time (moved from MOKE-24 on
 # 2026-10-08) and a one-way I-V sweep on the same Keithley: the voltage is
@@ -2474,7 +2487,7 @@ KEITHLEY_OVP_LEVELS_V = {
 NONLOCAL_IV_SWEEP_NPLC = KEITHLEY_RES_NPLC
 NONLOCAL_IV_SWEEP_MAX_POINTS = 10_000
 NONLOCAL_IV_SWEEP_RESULTS_DIRECTORY = (
-    Path(__file__).resolve().parent / f"{Path(__file__).stem}_NonLocal_IV_sweep_Results"
+    PROGRAM_DIRECTORY / f"{Path(__file__).stem}_NonLocal_IV_sweep_Results"
 )
 # 6221-IV (user, 2026-10-08): the RT-E Current scan on the Non-local page's
 # own 6221, SR830 #8/#9 and Zurich MFLI, with RT-E's settings and start-up
@@ -2515,7 +2528,7 @@ NONLOCAL_IV6221_FIRST_SETTLE_TAUS = 10.0
 # in compliance, or still autoranging) within Acquire s plus this.
 NONLOCAL_IV6221_MAX_EXTRA_S = 30.0
 NONLOCAL_IV6221_RESULTS_DIRECTORY = (
-    Path(__file__).resolve().parent / f"{Path(__file__).stem}_NonLocal_6221_IV_Results"
+    PROGRAM_DIRECTORY / f"{Path(__file__).stem}_NonLocal_6221_IV_Results"
 )
 NONLOCAL_METER_NAMES = {"8": "SR830 #8", "9": "SR830 #9", "mfli": "Zurich", "2182": "2182A"}
 # Frequency scan on 6221-IV and Gate-VI (user, 2026-10-10), as the STFMR
@@ -10471,7 +10484,7 @@ def _find_mfli_legacy_python() -> Path:
             Path(local_app_data) / "NBB/MOKE_MFLI_PY37/python.exe"
         )
     candidates.append(
-        Path(__file__).resolve().parent / ".mfli_py37/python.exe"
+        PROGRAM_DIRECTORY / ".mfli_py37/python.exe"
     )
     candidates.extend(
         (
@@ -18130,7 +18143,7 @@ class CombinedControlApp:
         self.camera_video_status_var = tk.StringVar(value="Recording: not started")
         self.camera_video_button = None
         self.camera_video_buttons: list[ttk.Button] = []
-        self.camera_video_directory = Path(__file__).resolve().parent
+        self.camera_video_directory = PROGRAM_DIRECTORY
         self.camera_video_marker_mode = "MOKE"
         self.camera_video_stopping = False
         self.camera_video_stop_future = None
@@ -19012,7 +19025,7 @@ class CombinedControlApp:
         self.stfmr_lockin_status_var = tk.StringVar(value="Not scanned yet")
         self.stfmr_lockin_rows: list[dict[str, object]] = []
         self.stfmr_lockin_recorder: STFMRScanRecorder | None = None
-        self.stfmr_lockin_save_directory = Path(__file__).resolve().parent
+        self.stfmr_lockin_save_directory = PROGRAM_DIRECTORY
         self.stfmr_lockin_save_path_var = tk.StringVar(value="Save folder is chosen when the sweep starts")
         # The last run's folder, where Save CSV opens (user, 2026-10-18).
         self.stfmr_lockin_run_directory: Path | None = None
@@ -33500,7 +33513,7 @@ class CombinedControlApp:
         previous = Path(previous_directory)
         initial_directory = previous if previous.is_dir() else previous.parent
         if not initial_directory.is_dir():
-            initial_directory = Path(__file__).resolve().parent
+            initial_directory = PROGRAM_DIRECTORY
         selected = filedialog.askdirectory(
             parent=self.root,
             title=title,
@@ -39002,7 +39015,7 @@ class CombinedControlApp:
             title="Select the folder for the CIDWM images",
             initialdir=str(
                 self.cidwm_image_directory if Path(self.cidwm_image_directory).is_dir()
-                else Path(__file__).resolve().parent
+                else PROGRAM_DIRECTORY
             ),
         )
         if not folder:
@@ -39221,7 +39234,7 @@ class CombinedControlApp:
         recorder = begin_scan_run(
             self.root, "CIDWM", "Select the folder for the CIDWM pulse sign scan",
             self.cidwm_scan_directory if Path(self.cidwm_scan_directory).is_dir()
-            else Path(__file__).resolve().parent,
+            else PROGRAM_DIRECTORY,
             parameters, prefix="CIDWM",
         )
         if recorder is None:
@@ -43235,7 +43248,7 @@ class CombinedControlApp:
         made, which begin_scan_run shows)."""
         label, prefix = self.NONLOCAL_SCAN_NAMES[scan]
         if initial_dir is not None and not Path(initial_dir).is_dir():
-            initial_dir = Path(__file__).resolve().parent
+            initial_dir = PROGRAM_DIRECTORY
         return begin_scan_run(self.root, label, folder_title, initial_dir, settings, prefix=prefix)
 
     def _nonlocal_run_started(self, recorder) -> None:
@@ -53686,7 +53699,7 @@ def newmark_load_performax():
             # where to put the pair and where they come from (user, 2026-10-17).
             raise NewmarkStageError(
                 f"{NEWMARK_DLL_NAME} was not found: it is not in the program's folder "
-                f"({Path(__file__).resolve().parent}), and Windows did not find it elsewhere. Copy the 64-bit "
+                f"({PROGRAM_DIRECTORY}), and Windows did not find it elsewhere. Copy the 64-bit "
                 f"{NEWMARK_DLL_NAME} and {NEWMARK_SIUSB_NAME} into that folder. They come from "
                 f"{NEWMARK_DLL_SOURCE}.") from error
         raise NewmarkStageError(newmark_explain_load_error(path, error)) from error

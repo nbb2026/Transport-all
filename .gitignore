@@ -31,6 +31,8 @@ MANIFEST
 #   before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+# ...but the recipe for Transport_all.exe is kept (user, 2026-11-10).
+!Other-files/packaging/Transport_all.spec
 
 # Installer logs
 pip-log.txt

@@ -1,5 +1,36 @@
 # Magneto-Electro-Optical Transport Experiment Control Directory
 
+## Windows .exe built by GitHub Actions (user, 2026-11-10)
+
+- **Workflow** `.github/workflows/build-windows.yml` ("Windows exe"): on every push to `main` (and `ci/**`), or by
+  hand (Run workflow), a Windows runner installs `requirements.txt` with Python 3.11 x64 and builds
+  `Transport_all.exe` with PyInstaller 6.22.3 from `Other-files/packaging/Transport_all.spec`: one file, no console
+  window, the Transport icon. Before uploading it checks the .exe: `--package-self-test` (below), the program's own
+  `--pco-dll-self-test`, and a start up to the main window (screenshot in the artifact `exe-checks`). The artifact
+  `Transport_all-windows-x64` holds the .exe, its SHA-256 and `BUILD_INFO.txt` (commit, version, package versions),
+  kept 90 days. Only `Transport_all.py` is built: MS-fourState.py, Test_Microwave_NH_dev.py, Avtech_pulse_test.py
+  and Newmark_motor_test.py are bench tools run from source. The Nuitka build package of 2026-08
+  (`MEO_Transport_V3_Windows_Build_Package`) stays as history.
+- **`requirements.txt`** (new): the versions of the last build verified on the lab PC (docs/HANDOFF_BUILD_AND_RELEASE.md,
+  section 2); `pco`, `zhinst`, `pythonnet` and `MultiPyVu` only on Windows, so the Mac installs the other five.
+- **What the spec adds** to PyInstaller's own search: the 27 PCO DLLs with their folders (`pco` loads them by path at
+  run time; an older one-file build missed them and the camera did not start), the icons in `assets/`, PyVISA's
+  metadata and submodules, `zhinst.core`/`zhinst.utils` and MultiPyVu (imported by name).
+- **`Other-files/packaging/package_self_test.py`** runs inside the .exe just before the program and does nothing unless
+  the .exe is started with `--package-self-test`; then it imports every bundled library (Tcl/Tk, numpy, Pillow, OpenCV,
+  pyserial, PyVISA, pco and its DLLs, zhinst, pythonnet with the .NET runtime, MultiPyVu), writes
+  `Transport_all_package_self_test.txt` beside the .exe and exits 0 or 1 without opening the program or any
+  instrument.
+- **Program:** `PROGRAM_DIRECTORY` (`program_directory()`) is the folder beside the .py, or beside the .exe of a
+  one-file build. In a PyInstaller one-file .exe `__file__` is inside a temporary `_MEI...` folder that is deleted
+  when the program exits, so the default results folders (`Transport_all_<page>_Results`), the camera video and
+  ST-FMR save folders and the folder dialogs' fallback start folder would have pointed there; they now use
+  `PROGRAM_DIRECTORY`, as do the MFLI `.mfli_py37` candidate and the Newmark DLL message ("the program's folder").
+  For the .py nothing changes. DLL and icon searches still also look in `__file__`'s folder (inside the .exe).
+  Test: `test_program_directory.py`. MS-fourState.py and Test_Microwave_NH_dev.py: only their "Copied from
+  Transport_all.py, SHA-256" line, refreshed by `tools/ms_fourstate_copy_core.py`.
+- **Not tested:** the .exe with instruments. GitHub's runner has none, so the checks cover packaging and start-up only.
+
 ## Renamed Transport_all.py (user, 2026-10-30)
 
 - The program `Transport_all_NH_dev.py` is now **`Transport_all.py`** (`git mv`, so its history follows), and the

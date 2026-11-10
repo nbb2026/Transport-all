@@ -28,6 +28,59 @@ stopping the rest from working.
 | `pco` | PCO camera acquisition |
 | `zhinst` | Zurich Instruments MFLI lock-in |
 | `pyserial` | LED controller, Cell-VSDM sample stage, KEPCO serial paths |
+| `pythonnet` | PPMS through QDInstrument, Thorlabs rotation |
+
+[`requirements.txt`](requirements.txt) pins the versions of the last build
+verified on the lab PC; `python3 -m pip install -r requirements.txt` installs
+them (on a Mac only the first five; the vendor packages are Windows-only).
+
+## Windows .exe
+
+Every push to `main` also builds the whole program as one Windows file,
+`Transport_all.exe`, which runs on Windows 10/11 (64-bit) without Python or any
+package installed ([`.github/workflows/build-windows.yml`](.github/workflows/build-windows.yml)).
+
+**Download.** On GitHub (signed in): Actions, then "Windows exe", then the
+newest green run on `main`, then under Artifacts `Transport_all-windows-x64`.
+The zip holds `Transport_all.exe`, its SHA-256 and `BUILD_INFO.txt` (commit,
+program version, package versions). Artifacts are kept for 90 days; a run can
+be started by hand with Run workflow.
+
+**Install.** Unzip into a folder you keep, such as `C:\Transport_all\`, not
+Downloads: the results folders (`Transport_all_<page>_Results`) are made
+beside the .exe, as they are beside the .py. Check the file if you like:
+`certutil -hashfile Transport_all.exe SHA256` must print the SHA-256 in the zip.
+
+**Run.** Double-click `Transport_all.exe`. It unpacks itself on each start,
+so the window takes a few seconds longer to appear than the .py's. The .exe
+is not code-signed: Windows SmartScreen may say "Windows protected your PC"
+(More info, then Run anyway), and antivirus may hold it until IT allows it.
+The .exe holds every Python package, but the instrument drivers stay outside
+it, as for the .py: NI-VISA and the GPIB driver, the PCO camera driver,
+Thorlabs Kinesis, LabOne, MultiVu/QDInstrument, and the DLLs that sit beside
+the program (`PerformaxCom.dll` and `SiUSBXp.dll` for the Newmark stage) go
+beside the .exe. An MFLI on LabOne 18.12 still needs the Python 3.7 bridge from
+`Other-files/INSTALL_MFLI_LABONE_18_12.bat`.
+
+**Update.** Close the program, download the newest artifact and replace
+`Transport_all.exe`; the results folders beside it are not touched.
+
+**Check.** `Transport_all.exe --package-self-test` loads every library inside
+the .exe without opening the program and writes the result to
+`Transport_all_package_self_test.txt` beside it. GitHub runs this, the PCO DLL
+self-test (`--pco-dll-self-test`) and a start of the program up to its main
+window after every build; no instrument is attached there, so instrument
+control is still tested only on the lab PC.
+
+**Build it yourself** on Windows, from the repository root:
+
+```bat
+py -3.11 -m pip install -r requirements.txt pyinstaller==6.22.3
+py -3.11 -m PyInstaller --noconfirm --clean Other-files/packaging/Transport_all.spec
+```
+
+The .exe is `dist\Transport_all.exe`. The recipe is
+[`Other-files/packaging/Transport_all.spec`](Other-files/packaging/Transport_all.spec).
 
 ## Pages
 
@@ -115,6 +168,8 @@ Default VISA addresses are set in the code and editable in the interface.
 | Path | Contents |
 | --- | --- |
 | `Transport_all.py` | The application |
+| `requirements.txt` | Its Python packages, with the lab PC's versions |
+| `Other-files/packaging/` | PyInstaller recipe for `Transport_all.exe` and its self-test |
 | `Other-files/test*.py`, `Other-files/test/` | Offline regression tests |
 | `Other-files/README.md` | Dated change log, newest first |
 | `Other-files/docs/` | Generated user manual |
@@ -147,7 +202,8 @@ GitHub's Linux and Windows machines on every push to `main`
 ([`.github/workflows/gui-tests.yml`](.github/workflows/gui-tests.yml),
 [`Other-files/ci/gui_checks.py`](Other-files/ci/gui_checks.py)). Results and
 screenshots are on the repository's Actions tab. Running them there keeps
-test windows off the desk computer's screen.
+test windows off the desk computer's screen. The Windows .exe is built and
+checked by a separate workflow ([Windows .exe](#windows-exe)).
 
 Passing tests are not hardware acceptance. They build panels from stubs and
 never run the real constructor, so a change should also be checked by starting

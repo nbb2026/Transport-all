@@ -1,0 +1,19 @@
+# Python packages of Transport_all.py (Windows .exe build, user, 2026-11-10).
+# The versions are those of the last build verified on the lab PC
+# (Other-files/docs/HANDOFF_BUILD_AND_RELEASE.md, section 2).  GitHub Actions
+# builds Transport_all.exe with exactly these (.github/workflows/build-windows.yml).
+#
+# Lab PC, to run the .py instead of the .exe (64-bit Python 3.11):
+#     py -3.11 -m pip install -r requirements.txt
+# Mac (development, no instruments): the same command installs the first five;
+# the instrument vendors' packages below are Windows-only and skipped.
+numpy==2.4.6
+Pillow==12.3.0
+opencv-python==5.0.0.93
+PyVISA==1.16.2
+pyserial==3.5
+# Instrument vendors' Python packages.
+pco==2.6.0; sys_platform == "win32"  # PCO camera (SDK DLLs inside the wheel)
+zhinst==26.4.1; sys_platform == "win32"  # Zurich MFLI; LabOne 18.12 uses the Python 3.7 bridge instead
+pythonnet==3.1.0; sys_platform == "win32"  # .NET: QDInstrument (PPMS), Thorlabs Kinesis, LabOne .NET API
+MultiPyVu==3.6.1; sys_platform == "win32"  # optional PPMS backend

@@ -1,0 +1,134 @@
+# Builds Transport_all.exe: the whole program as one Windows file (Windows
+# 10/11, 64-bit) that runs without Python or any package installed.  Runs on
+# every push to main (and to ci/** test branches), or by hand: Actions tab ->
+# "Windows exe" -> Run workflow.  The .exe is attached to the run as the
+# artifact "Transport_all-windows-x64" (open the run, then Artifacts).
+#
+# Before uploading, the .exe is checked on the runner: it loads every library
+# it bundles (--package-self-test), loads the PCO DLLs (--pco-dll-self-test),
+# and starts and shows its main window.  No instrument is attached here, so
+# instrument control itself is not tested.
+name: Windows exe
+
+on:
+  push:
+    branches: [main, "ci/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch replaces a build still running.
+concurrency:
+  group: windows-exe-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONIOENCODING: utf-8
+  PYTHONUTF8: "1"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: x64
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Screen like the lab PC
+        continue-on-error: true
+        shell: pwsh
+        run: Set-DisplayResolution -Width 2560 -Height 1440 -Force
+      - name: Python packages (requirements.txt) and PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller==6.22.3 pyinstaller-hooks-contrib==2026.10
+          python -m pip check
+      - name: Build Transport_all.exe
+        run: python -m PyInstaller --noconfirm --clean Other-files/packaging/Transport_all.spec
+      - name: Build information
+        shell: pwsh
+        run: |
+          $exe = Get-Item dist/Transport_all.exe
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  Transport_all.exe" | Set-Content -Encoding ascii dist/Transport_all.exe.sha256
+          $version = (Select-String -Path Transport_all.py -Pattern '^APP_VERSION = "(.+)"').Matches[0].Groups[1].Value
+          $info = @(
+            "Transport_all.exe, program version $version",
+            "Commit: $env:GITHUB_SHA ($env:GITHUB_REF_NAME)",
+            "Built: $((Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm')) UTC, run $env:GITHUB_RUN_ID",
+            "Size: $($exe.Length) bytes",
+            "SHA-256: $hash",
+            "",
+            "Python $(python -c 'import platform; print(platform.python_version())') and packages:"
+          ) + (python -m pip freeze)
+          $info | Set-Content -Encoding utf8 dist/BUILD_INFO.txt
+          Get-Content dist/BUILD_INFO.txt | Select-Object -First 6
+      - name: The .exe loads every library it bundles
+        shell: pwsh
+        run: |
+          $p = Start-Process (Resolve-Path dist/Transport_all.exe).Path -ArgumentList "--package-self-test" -Wait -PassThru
+          Get-Content dist/Transport_all_package_self_test.txt
+          if ($p.ExitCode -ne 0) { throw "Package self-test failed (exit code $($p.ExitCode))" }
+      - name: The program's own PCO DLL self-test
+        if: success() || failure()
+        shell: pwsh
+        run: |
+          $p = Start-Process (Resolve-Path dist/Transport_all.exe).Path -ArgumentList "--pco-dll-self-test" -Wait -PassThru
+          Get-Content dist/MOKE_NH_*_pco_self_test.txt
+          if ($p.ExitCode -ne 0) { throw "PCO DLL self-test failed (exit code $($p.ExitCode))" }
+      - name: The program starts and shows its window
+        if: success() || failure()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force exe-check | Out-Null
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          function Save-Screen($name) {
+            $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+            [System.Drawing.Graphics]::FromImage($bitmap).CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+            $bitmap.Save("exe-check/$name.png")
+          }
+          $title = "Magneto_Electro_Optical_Microwave_Transport_NH"
+          $started = Get-Date
+          $p = Start-Process (Resolve-Path dist/Transport_all.exe).Path -PassThru
+          $window = $null
+          while (-not $window -and ((Get-Date) - $started).TotalSeconds -lt 180) {
+            Start-Sleep -Seconds 2
+            if ($p.HasExited) { Save-Screen "exited"; throw "Transport_all.exe exited during start-up (exit code $($p.ExitCode))" }
+            $window = Get-Process Transport_all -ErrorAction SilentlyContinue |
+              Where-Object { $_.MainWindowTitle -like "$title*" } | Select-Object -First 1
+          }
+          if (-not $window) {
+            Save-Screen "no_window"
+            Get-Process Transport_all -ErrorAction SilentlyContinue | Format-Table Id, MainWindowTitle | Out-String | Write-Host
+            throw "No main window within 180 s"
+          }
+          "Main window '$($window.MainWindowTitle)' after $([int]((Get-Date) - $started).TotalSeconds) s"
+          Start-Sleep -Seconds 15
+          Save-Screen "started"
+          if ($p.HasExited) { throw "Transport_all.exe exited after its window appeared (exit code $($p.ExitCode))" }
+          Get-Process Transport_all | Format-Table Id, MainWindowTitle | Out-String | Write-Host
+          Stop-Process -Name Transport_all -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Transport_all-windows-x64
+          path: |
+            dist/Transport_all.exe
+            dist/Transport_all.exe.sha256
+            dist/BUILD_INFO.txt
+          if-no-files-found: error
+          retention-days: 90
+      - uses: actions/upload-artifact@v4
+        if: success() || failure()
+        with:
+          name: exe-checks
+          path: |
+            exe-check
+            dist/*_self_test.txt
+            build/Transport_all/warn-Transport_all.txt
+          if-no-files-found: ignore

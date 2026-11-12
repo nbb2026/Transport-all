@@ -43,6 +43,9 @@ ASSETS = ROOT / "Other-files" / "assets"
 # column) and "Publisher" (Task Manager).  It is not a code signature:
 # SmartScreen still says "Unknown publisher" for an unsigned .exe.
 PUBLISHER = "HengNiu & ClaudeCode"
+# File > Properties > Details does not show the company name but does show
+# the copyright, so the publisher is named there too (user, 2026-11-12).
+COPYRIGHT = f"© 2026 {PUBLISHER}"
 VERSION = re.search(
     r'^APP_VERSION = "(.+)"', (ROOT / "Transport_all.py").read_text(encoding="utf-8"), re.M
 ).group(1)
@@ -84,8 +87,9 @@ a = Analysis(
     noarchive=False,
 )
 pyz = PYZ(a.pure)
-# File > Properties > Details shows the description, versions, product name
-# and original file name; the company name (PUBLISHER) shows elsewhere (above).
+# File > Properties > Details shows the description, versions, product name,
+# copyright and original file name; the company name (PUBLISHER) shows
+# elsewhere (above).
 version_info = VSVersionInfo(
     ffi=FixedFileInfo(
         filevers=VERSION_NUMBERS,
@@ -107,6 +111,7 @@ version_info = VSVersionInfo(
                         StringStruct("FileDescription", "Transport_all"),
                         StringStruct("FileVersion", VERSION),
                         StringStruct("InternalName", "Transport_all"),
+                        StringStruct("LegalCopyright", COPYRIGHT),
                         StringStruct("OriginalFilename", "Transport_all.exe"),
                         StringStruct("ProductName", "Transport_all"),
                         StringStruct("ProductVersion", VERSION),

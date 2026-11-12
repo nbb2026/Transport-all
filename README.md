@@ -60,7 +60,8 @@ beside it: `shasum -a 256 -c Transport_all.exe.sha256`).
 **Run.** Double-click `Transport_all.exe`. It unpacks itself on each start,
 so the window takes a few seconds longer to appear than the .py's. Its
 publisher, HengNiu & ClaudeCode, is in the file's version information, which
-Windows shows as "Company" (Explorer) and "Publisher" (Task Manager). The .exe
+Windows shows as "Company" (Explorer), "Publisher" (Task Manager) and the
+copyright "© 2026 HengNiu & ClaudeCode" (Properties, then Details). The .exe
 is not code-signed, though, so Windows SmartScreen may still say "Windows
 protected your PC" with "Unknown publisher" (More info, then Run anyway), and
 antivirus may hold it until IT allows it.

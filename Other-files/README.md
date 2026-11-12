@@ -2,6 +2,12 @@
 
 ## Windows .exe built by GitHub Actions (user, 2026-11-10)
 
+- **Publisher** (user, 2026-11-12): the spec gives the .exe version information, with the company name
+  "HengNiu & ClaudeCode" (shown as "Company" in Explorer and "Publisher" in Task Manager), the description and
+  product name `Transport_all`, the original file name and the version `APP_VERSION` read from `Transport_all.py`.
+  The build step fails unless the built .exe reports that company name and version; `BUILD_INFO.txt` and the release
+  notes name the publisher. It is not a code signature: SmartScreen still shows "Unknown publisher" (that needs a
+  code-signing certificate issued to a verified name).
 - **Release "Windows exe (newest main)"** (user, 2026-11-10: wanted the .exe under the repository's Packages; GitHub
   Packages holds only registry packages with no download button, so a release instead): a pre-release on the tag
   `windows-exe`, made once by the owner, so v1.0.2 stays Latest. The workflow's `release` job (main only, after the

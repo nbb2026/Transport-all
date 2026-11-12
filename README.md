@@ -58,9 +58,12 @@ must print the SHA-256 in the release notes (on a Mac, with the `.sha256` file
 beside it: `shasum -a 256 -c Transport_all.exe.sha256`).
 
 **Run.** Double-click `Transport_all.exe`. It unpacks itself on each start,
-so the window takes a few seconds longer to appear than the .py's. The .exe
-is not code-signed: Windows SmartScreen may say "Windows protected your PC"
-(More info, then Run anyway), and antivirus may hold it until IT allows it.
+so the window takes a few seconds longer to appear than the .py's. Its
+publisher, HengNiu & ClaudeCode, is in the file's version information, which
+Windows shows as "Company" (Explorer) and "Publisher" (Task Manager). The .exe
+is not code-signed, though, so Windows SmartScreen may still say "Windows
+protected your PC" with "Unknown publisher" (More info, then Run anyway), and
+antivirus may hold it until IT allows it.
 The .exe holds every Python package but not the instrument drivers, which are
 installed as for the .py: NI-VISA and the GPIB driver, the PCO camera driver,
 Thorlabs Kinesis, LabOne and MultiVu/QDInstrument. DLLs kept beside the .py

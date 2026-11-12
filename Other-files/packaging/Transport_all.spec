@@ -13,6 +13,7 @@
 # (NI-VISA and GPIB, PCO camera driver, Thorlabs Kinesis, LabOne, MultiVu /
 # QDInstrument, Newmark PerformaxCom.dll), as for the .py program.
 
+import re
 import sysconfig
 from pathlib import Path
 
@@ -23,11 +24,29 @@ from PyInstaller.utils.hooks import (
     collect_submodules,
     copy_metadata,
 )
+from PyInstaller.utils.win32.versioninfo import (
+    FixedFileInfo,
+    StringFileInfo,
+    StringStruct,
+    StringTable,
+    VarFileInfo,
+    VarStruct,
+    VSVersionInfo,
+)
 
 PACKAGING = Path(SPECPATH).resolve()
 ROOT = PACKAGING.parents[1]
 ICON = "Magneto_Electro_Optical_Microwave_Transport_NH"
 ASSETS = ROOT / "Other-files" / "assets"
+# The publisher, stored as the company name in the .exe's version information
+# (user, 2026-11-12).  Windows shows it as "Company" (Explorer tooltip and
+# column) and "Publisher" (Task Manager).  It is not a code signature:
+# SmartScreen still says "Unknown publisher" for an unsigned .exe.
+PUBLISHER = "HengNiu & ClaudeCode"
+VERSION = re.search(
+    r'^APP_VERSION = "(.+)"', (ROOT / "Transport_all.py").read_text(encoding="utf-8"), re.M
+).group(1)
+VERSION_NUMBERS = tuple((list(map(int, re.findall(r"\d+", VERSION))) + [0, 0, 0, 0])[:4])
 
 # The window and taskbar icons, found by the program in "assets" beside it.
 datas = [
@@ -65,6 +84,39 @@ a = Analysis(
     noarchive=False,
 )
 pyz = PYZ(a.pure)
+# File > Properties > Details shows the description, versions, product name
+# and original file name; the company name (PUBLISHER) shows elsewhere (above).
+version_info = VSVersionInfo(
+    ffi=FixedFileInfo(
+        filevers=VERSION_NUMBERS,
+        prodvers=VERSION_NUMBERS,
+        mask=0x3F,
+        flags=0x0,
+        OS=0x40004,  # Windows NT, 32/64-bit
+        fileType=0x1,  # an application
+        subtype=0x0,
+        date=(0, 0),
+    ),
+    kids=[
+        StringFileInfo(
+            [
+                StringTable(
+                    "040904B0",  # U.S. English, Unicode
+                    [
+                        StringStruct("CompanyName", PUBLISHER),
+                        StringStruct("FileDescription", "Transport_all"),
+                        StringStruct("FileVersion", VERSION),
+                        StringStruct("InternalName", "Transport_all"),
+                        StringStruct("OriginalFilename", "Transport_all.exe"),
+                        StringStruct("ProductName", "Transport_all"),
+                        StringStruct("ProductVersion", VERSION),
+                    ],
+                )
+            ]
+        ),
+        VarFileInfo([VarStruct("Translation", [0x0409, 0x04B0])]),
+    ],
+)
 exe = EXE(
     pyz,
     a.scripts,
@@ -73,6 +125,7 @@ exe = EXE(
     [],
     name="Transport_all",
     icon=str(ASSETS / f"{ICON}.ico"),
+    version=version_info,
     console=False,  # a GUI program: no console window
     upx=False,  # compressed executables are flagged more often by antivirus
     debug=False,

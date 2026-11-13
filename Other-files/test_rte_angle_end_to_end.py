@@ -676,7 +676,7 @@ class RunLogTests(RunLogBase):
         expected = ["run_prepared", "scan_started", "harmonic_pass", "field_programmed", "field_settled"]
         for _angle in range(5):
             expected += ["stage_move", "point_saved"]
-        self.assertEqual(self.without_notes(events), expected + ["outputs_zeroed", "run_finished"])
+        self.assertEqual(self.without_notes(events), expected + ["outputs_zeroed", "plot_snapshots", "run_finished"])
         for event in events:
             datetime.datetime.fromisoformat(event["timestamp"])
         # run_prepared: the settings and the instruments at Start.
@@ -819,7 +819,7 @@ class RunLogTests(RunLogBase):
         expected = ["run_prepared", "scan_started", "harmonic_pass"]
         for _point in range(3):
             expected += ["field_programmed", "field_settled", "point_saved"]
-        self.assertEqual(self.without_notes(events), expected + ["outputs_zeroed", "run_finished"])
+        self.assertEqual(self.without_notes(events), expected + ["outputs_zeroed", "plot_snapshots", "run_finished"])
         self.assertEqual([e["current_a"] for e in events if e["event"] == "field_programmed"], [0.0, 1.0, 0.0])
         self.assertEqual({(e["x_column"], e["x"]) for e in events if e["event"] == "point_saved"},
                          {("measured_field_g", 123.0)})
@@ -838,7 +838,7 @@ class RunLogTests(RunLogBase):
         events = self.events(h)
         self.assertEqual(self.without_notes(events),
                          ["run_prepared", "scan_started", "harmonic_pass", "point_saved", "point_saved",
-                          "point_saved", "outputs_zeroed", "run_finished"])
+                          "point_saved", "outputs_zeroed", "plot_snapshots", "run_finished"])
         self.assertEqual([(e["target"], e["x_column"], e["x"]) for e in events if e["event"] == "point_saved"],
                          [(0.5, "6221_current_rms_ma", 0.5), (1.0, "6221_current_rms_ma", 1.0),
                           (1.5, "6221_current_rms_ma", 1.5)])
@@ -860,7 +860,8 @@ class RunLogTests(RunLogBase):
         events = self.events(h)
         self.assertEqual(self.without_notes(events),
                          ["run_prepared", "scan_started", "harmonic_pass", "field_programmed", "field_settled",
-                          "stage_move", "point_saved", "stop_requested", "outputs_zeroed", "run_finished"])
+                          "stage_move", "point_saved", "stop_requested", "outputs_zeroed", "plot_snapshots",
+                          "run_finished"])
         (stop,) = [e for e in events if e["event"] == "stop_requested"]
         self.assertEqual(stop["button"], "Stop")
         finished = events[-1]
@@ -876,7 +877,8 @@ class RunLogTests(RunLogBase):
         events = self.events(h)
         self.assertEqual(self.without_notes(events),
                          ["run_prepared", "scan_started", "harmonic_pass", "field_programmed", "field_settled",
-                          "stage_move", "point_saved", "stage_failure", "outputs_zeroed", "run_finished"])
+                          "stage_move", "point_saved", "stage_failure", "outputs_zeroed", "plot_snapshots",
+                          "run_finished"])
         (failure,) = [e for e in events if e["event"] == "stage_failure"]
         self.assertIn("not at the target", failure["error"])
         self.assertEqual(failure["stage"], "stage stopped at +9.999°")
@@ -910,7 +912,7 @@ class RunLogTests(RunLogBase):
         self.assertEqual(self.without_notes(events),
                          ["run_prepared", "scan_started", "harmonic_pass", "field_programmed", "field_settled",
                           "stage_move", "point_saved", "stage_move", "point_saved", "outputs_zeroed",
-                          "run_finished"])
+                          "plot_snapshots", "run_finished"])
         self.assertEqual((events[-1]["outcome"], events[-1]["points_saved"], events[-1]["stage"]),
                          ("error", 2, "stage at +20.000°"))
         self.assertIn("No space left on device", events[-1]["error"])
@@ -1151,7 +1153,8 @@ class OuterScanTests(RunLogBase):
         for _field in range(3):
             expected_events += ["field_programmed", "field_settled", "stage_move", "point_saved", "stage_move",
                                 "point_saved"]
-        self.assertEqual(self.without_notes(events), expected_events + ["outputs_zeroed", "run_finished"])
+        self.assertEqual(self.without_notes(events),
+                         expected_events + ["outputs_zeroed", "plot_snapshots", "run_finished"])
         self.assertEqual([(e["step_index"], e["steps"], e["current_a"]) for e in events
                           if e["event"] == "field_programmed"], [(1, 3, 0.0), (2, 3, 1.0), (3, 3, 2.0)])
         self.assertEqual([e["step_index"] for e in events if e["event"] == "field_settled"], [1, 2, 3])
@@ -1213,7 +1216,7 @@ class OuterScanTests(RunLogBase):
         events = self.without_notes(self.events(h))
         self.assertEqual(events.count("field_programmed"), 2)
         self.assertEqual(events.count("field_settled"), 1, "field 2 never settled")
-        self.assertEqual(events[-3:], ["stop_requested", "outputs_zeroed", "run_finished"])
+        self.assertEqual(events[-4:], ["stop_requested", "outputs_zeroed", "plot_snapshots", "run_finished"])
         self.assertEqual(self.events(h)[-1]["outcome"], "stopped")
         self.assert_closed(h)
 
@@ -1254,7 +1257,7 @@ class OuterScanTests(RunLogBase):
                          "the 6221 off at once, no next field, then both zeroed; the stage not moved again")
         self.assertEqual([e[2] for e in h.log if e[:2] == ("stage", "move")], [0.0, 10.0])
         events = self.without_notes(self.events(h))
-        self.assertEqual(events[-3:], ["stage_failure", "outputs_zeroed", "run_finished"])
+        self.assertEqual(events[-4:], ["stage_failure", "outputs_zeroed", "plot_snapshots", "run_finished"])
         self.assert_closed(h)
 
     def test_a_field_that_cannot_be_set_switches_the_kepco_off_and_zeroes_both(self):
@@ -1305,7 +1308,8 @@ class OuterScanTests(RunLogBase):
                            "field_settled", "stage_move", "point_saved", "stage_move", "point_saved"]
         for _current in range(2):
             expected_events += ["current_programmed", "stage_move", "point_saved", "stage_move", "point_saved"]
-        self.assertEqual(self.without_notes(events), expected_events + ["outputs_zeroed", "run_finished"])
+        self.assertEqual(self.without_notes(events),
+                         expected_events + ["outputs_zeroed", "plot_snapshots", "run_finished"])
         self.assertEqual([(e["step_index"], e["current_rms_ma"]) for e in events if e["event"] == "current_programmed"],
                          [(1, .5), (2, 1.), (3, 1.5)])
         prepared = events[0]

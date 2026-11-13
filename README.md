@@ -123,8 +123,8 @@ and each run writes its own folder, as on PPMS and STFMR:
   - **Boxes:** "2400-IV settings" holds the safety tick, sample and current
     limit; "2400-IV scan" holds Start/End/Step/Settle and the buttons.
   - **Files:** the folder is chosen at Start. The run folder
-    `2400-IV_<sample>_<time>/` holds the live CSV and the parameter log, and
-    "Save plot PNG" adds the plot there.
+    `2400-IV_<sample>_<time>/` holds the live CSV and the parameter log. The
+    sweep's end saves the plot there, and "Save plot PNG" saves it again.
 - **6221-IV** is the RT-E Current scan on this page's 6221 and lock-ins,
   with RT-E's settings and start-up values:
   - **"6221-IV settings":** the 6221 (mA RMS, Frequency, Compliance, Set
@@ -160,8 +160,25 @@ scan once per harmonic order.
 **RT-E** is the same transport measurement at room temperature, with the field
 from a KEPCO supply read back by a Lake Shore gaussmeter.
 
-**FMR** sweeps field against a Keysight PNA network analyser. **STFMR** sweeps field with a
+**FMR** sweeps field against a Keysight PNA network analyser. It starts with
+the Lake Shore 648 as its magnet supply at `GPIB0::15::INSTR`, the Lake Shore
+475 at `GPIB0::12::INSTR` and the PNA at `GPIB0::16::INSTR` (since
+2026-11-13); the KEPCO 4886 is the other choice in the supply list.
+**STFMR** sweeps field with a
 microwave source and lock-in detection, with MFLI, SR830 or both together.
+
+**Plot pictures.** Every scan saves a screenshot of its plots in its run
+folder when it ends, whether it completed, was stopped or failed, as long as
+it saved at least one point (since 2026-11-13; Gate-VI did already, and MOKE
+magnet and MOKE-24 only with "Save CSV + PNG"). A page with one plot saves
+`<run name>_plot_snapshot.png`; a page with a grid of plots (PPMS, SHV,
+6221-IV, STFMR) saves one picture of the whole plot box,
+`<run name>_plots_snapshot.png`. It is a screenshot, so it holds what is on
+the screen at that moment: keep the scan's page shown and the program's
+window uncovered, and the PC unlocked. If the page is not the one shown, no
+picture is saved and the run log's `plot_snapshots` entry says why; the CSV
+and the log are not affected. The CIDWM pulse scan has no axis plot and
+saves camera images instead.
 
 ## Instruments
 

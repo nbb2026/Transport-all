@@ -501,8 +501,10 @@ class SHVSaveZeroTests(ete.RunLogBase):
                 events = self.events(h)
                 names = self.without_notes(events)
                 self.assertEqual(names[:3], ["run_prepared", "scan_started", "harmonic_pass"])
-                self.assertEqual((sorted(names[-3:-1]), names[-1]), (["outputs_zeroed", "stop_requested"],
-                                                                     "run_finished"))
+                # plot_snapshots: the end's picture of the plots, before the
+                # log is closed (user, 2026-11-13).
+                self.assertEqual((sorted(names[-4:-2]), names[-2:]), (["outputs_zeroed", "stop_requested"],
+                                                                      ["plot_snapshots", "run_finished"]))
                 saved = names.count("point_saved")
                 rows = self.rows(h)
                 self.assertEqual((len(rows), saved, events[-1]["points_saved"]), (saved, saved, saved))

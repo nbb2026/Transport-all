@@ -114,8 +114,11 @@ class RunFolderAndZeroTests(unittest.TestCase):
         self.assertFalse(any(entry[:2] == ("ppms", "set_field") for entry in page.rig.log))
         events = page.events()
         names = [e["event"] for e in events if e["event"] != "note"]
+        # plot_snapshots: the end's picture of the plots, before the log is
+        # closed (user, 2026-11-13); this page has no screen, so the entry
+        # says why none was saved.
         self.assertEqual(names, ["run_prepared", "scan_started", "harmonic_pass", "point_saved", "point_saved",
-                                 "outputs_zeroed", "run_finished"])
+                                 "outputs_zeroed", "plot_snapshots", "run_finished"])
         prepared, finished = events[0], events[-1]
         self.assertEqual(prepared["settings"]["mode"], "Current")
         self.assertEqual(prepared["file_name"], "run1")
@@ -169,7 +172,8 @@ class RunFolderAndZeroTests(unittest.TestCase):
         self.assertFalse(panel.ppms_macro_scan_result)
         events = page.events()
         names = [e["event"] for e in events if e["event"] != "note"]
-        self.assertEqual(names[-4:], ["point_saved", "stop_requested", "outputs_zeroed", "run_finished"])
+        self.assertEqual(names[-5:], ["point_saved", "stop_requested", "outputs_zeroed", "plot_snapshots",
+                                      "run_finished"])
         self.assertEqual(events[-1]["outcome"], "stopped")
         self.assertTrue(events[-1]["stop_reason"].startswith("Stop"))
         self.assertEqual(next(e for e in events if e["event"] == "stop_requested")["button"], "Stop")

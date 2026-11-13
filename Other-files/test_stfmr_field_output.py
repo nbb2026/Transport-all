@@ -81,6 +81,12 @@ class FieldOutputTests(unittest.TestCase):
             rows={key: [bool(w.winfo_ismapped()) for w in widgets]
                   for key, widgets in a.stfmr_lockin_supply_widgets.items()})
         cls.choose_supply(app.STFMR_LOCKIN_MAGNET_CHOICES[0])
+        # The FMR page starts on the Lake Shore 648 since 2026-11-13 (user's
+        # picture of its connections): its KEPCO 4886 tests here choose the
+        # KEPCO too, as its combobox does.  test_panel_defaults checks the
+        # start-up choice and the LS648's row.
+        a.stfmr_magnet_choice_var.set(app.STFMR_FMR_MAGNET_CHOICES[0])
+        a._stfmr_magnet_choice_changed()
         cls.root.update()
 
     @classmethod

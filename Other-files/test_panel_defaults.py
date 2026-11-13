@@ -3,9 +3,11 @@
 Both are decided in the panel constructors, which the stub-based suites never
 run, so they are checked here against a fully built application.
 """
+import tempfile
 import tkinter as tk
 import tkinter.font
 import unittest
+from pathlib import Path
 
 from lab_screen import LAB_WIDE, build_lab_app, lab_window
 from test_ppms_motor_debug import app
@@ -594,6 +596,38 @@ class PanelDefaultTests(unittest.TestCase):
             "zurich": ("1+2+3", True),
         })
 
+    def test_the_fmr_page_starts_on_the_ls648_as_the_users_picture(self):
+        """The FMR connections at start-up (user's picture of the page,
+        2026-11-13): the magnet supply is the LS648 at GPIB0::15, the LS475
+        is at GPIB0::12 and the PNA at GPIB0::16.  The LS648's row and
+        field-output panel are the ones shown; the KEPCO 4886 stays one
+        choice away."""
+        a = self.app
+        self.assertEqual((a.stfmr_magnet_choice, a.stfmr_magnet_choice_var.get()), ("LS648", "LS648"))
+        self.assertEqual({key: a.stfmr_resource_vars[key].get() for key in ("lakeshore", "gauss", "vna")},
+                         {"lakeshore": "GPIB0::15::INSTR", "gauss": "GPIB0::12::INSTR", "vna": "GPIB0::16::INSTR"})
+        self.assertTrue(a._stfmr_lakeshore_chosen())
+        self.assertEqual(a._stfmr_supply_label(), "LS648")
+
+        def shown(key):
+            return [bool(widget.winfo_manager()) for widget in a.stfmr_supply_widgets[key]]
+
+        self.assertEqual((set(shown("lakeshore")), set(shown("kepco"))), ({True}, {False}))
+        self.assertEqual(a.stfmr_field_output_frame.cget("text"), "Lake Shore 648 field output")
+        self.assertEqual(a.stfmr_output_limit_label_var.get(), "Rate A/s:")
+        # The KEPCO 4886, chosen as its combobox would, and back.
+        a.stfmr_magnet_choice_var.set(app.STFMR_FMR_MAGNET_CHOICES[0])
+        a._stfmr_magnet_choice_changed()
+        try:
+            self.assertEqual(a.stfmr_magnet_choice, app.MAGNET_SUPPLY_KEPCO)
+            self.assertEqual((set(shown("lakeshore")), set(shown("kepco"))), ({False}, {True}))
+            self.assertEqual(a.stfmr_resource_vars["kepco"].get(), "GPIB0::6::INSTR")
+            self.assertEqual(a.stfmr_field_output_frame.cget("text"), "KEPCO 4886 BOP 20-10 field output")
+        finally:
+            a.stfmr_magnet_choice_var.set(app.STFMR_FMR_MAGNET_CHOICES[1])
+            a._stfmr_magnet_choice_changed()
+        self.assertEqual(a.stfmr_magnet_choice, "LS648")
+
     def test_every_lock_in_time_constant_box_starts_at_1_s(self):
         """User, 2026-10-14: "all default lock-in time constant change to
         1s".  The PPMS and RT-E Zurich TC, the Non-local rack's Zurich TC and
@@ -815,6 +849,40 @@ class ReviewFixWidgetTests(unittest.TestCase):
                 pass
             found.extend(ReviewFixWidgetTests.labels_of(child, variable))
         return found
+
+    def test_a_scans_end_saves_a_real_picture_of_the_plots_on_the_screen(self):
+        """save_scan_plot_snapshots with the real screen grab (user,
+        2026-11-13: every scan saves a screenshot of its plots when it
+        ends).  The PPMS plot box, a frame holding the page's grid of plots,
+        is saved at its size on the screen while PPMS is the page shown; it
+        is not saved, with the reason, while another page is; a single
+        canvas (FMR's) is saved the same way."""
+        from PIL import Image
+        panel = self.app.ppms_panel
+        self.select("PPMS")
+        box = panel.ppms_plot_frame
+        with tempfile.TemporaryDirectory() as folder:
+            recorder = app.ScanRunRecorder(Path(folder), "PPMS", "run", {}, label="PPMS")
+            try:
+                note = panel.save_scan_plot_snapshots(
+                    recorder, (("plots", box),), redraw=panel._redraw_ppms_transport_plot)
+                self.assertEqual(note, "")
+                run = Path(folder) / "run"
+                with Image.open(run / "run_plots_snapshot.png") as picture:
+                    self.assertEqual(picture.size, (box.winfo_width(), box.winfo_height()))
+                self.assertGreater(box.winfo_width() * box.winfo_height(), 10000, "the whole plot box")
+                self.select("FMR")
+                note = panel.save_scan_plot_snapshots(recorder, (("plots", box),))
+                self.assertEqual(note, "; plot snapshot save failed: plots: The plot is not visible; "
+                                       "cannot capture a snapshot")
+                canvas = self.app.stfmr_fmr_canvas
+                self.assertEqual(self.app.save_scan_plot_snapshots(recorder, (("plot", canvas),)), "")
+                with Image.open(run / "run_plot_snapshot.png") as picture:
+                    self.assertEqual(picture.size, (canvas.winfo_width(), canvas.winfo_height()))
+                self.assertEqual(sorted(path.name for path in run.glob("*.png")),
+                                 ["run_plot_snapshot.png", "run_plots_snapshot.png"])
+            finally:
+                recorder.close("completed")
 
     def test_the_moke_status_fits_with_a_kepco_sent_not_read_back(self):
         self.select("MOKE magnet")

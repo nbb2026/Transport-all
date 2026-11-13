@@ -2724,8 +2724,9 @@ STFMR_LOCKIN_MAGNET_CHOICES = ("KEPCO4886", "LS643")
 STFMR_FMR_MAGNET_CHOICES = ("KEPCO4886", "LS648")
 # The Lake Shore 643 and 648 electromagnet power supplies (user, 2026-10-21:
 # "Add LS643 connection & control for SHV and STFMR. Add LS648 connection &
-# control for FMR").  Each page chooses its magnet supply; the KEPCO 4886 is
-# the default, so nothing changes until a Lake Shore is chosen.  Lake Shore's
+# control for FMR").  Each page chooses its magnet supply.  The KEPCO 4886
+# was the default; SHV and ST-FMR start on the 643 since 2026-10-23 and FMR on
+# the 648 since 2026-11-13 (user), the KEPCO one choice away.  Lake Shore's
 # own Python driver treats the two as one class with the same commands; only
 # commands of the 648 manual's section 5.4 are sent, and none that changes a
 # persistent setting (no LIMIT, IEEE, XPGM, MAGWTR, INTWTR, LOCK, MODE, ERCL).
@@ -2739,8 +2740,9 @@ STFMR_FMR_MAGNET_CHOICES = ("KEPCO4886", "LS648")
 LAKESHORE_MAGNET_MODELS = {
     "643": {"label": "Lake Shore 643", "short": "LS643", "model": "MODEL643", "max_current_a": 40.0,
             "resource": "GPIB0::12::INSTR", "tolerance_a": 0.05, "tolerance_rel": 0.002},
+    # GPIB0::15 since 2026-11-13 (the user's picture of the FMR connections).
     "648": {"label": "Lake Shore 648", "short": "LS648", "model": "MODEL648", "max_current_a": 100.0,
-            "resource": "GPIB0::10::INSTR", "tolerance_a": 0.05, "tolerance_rel": 0.002},
+            "resource": "GPIB0::15::INSTR", "tolerance_a": 0.05, "tolerance_rel": 0.002},
 }
 # The choice on each page: SHV and ST-FMR have the 643, FMR the 648.
 MAGNET_SUPPLY_KEPCO = "KEPCO 4886"
@@ -16065,6 +16067,16 @@ def scan_log_line(name: str, details: dict) -> str:
 #    dialog says how each output ended.  close() comes before any dialog.  A
 #    dialog says CHECK IT when an output was not confirmed at zero.
 # 7. Save CSV as opens in the last run folder (initialdir=recorder.directory).
+# 8. The plots (user, 2026-11-13): in the finish, before close() and before
+#    any dialog, save_scan_plot_snapshots saves a screenshot of the page's
+#    plot, or one of its plot box, into the run folder and logs
+#    plot_snapshots.  It never raises; a page that is not shown saves none.
+#
+# How long a scan's end waits, after redrawing its plots, for the drawing to
+# reach the screen before it is grabbed: three frames at 60 Hz.
+SCAN_PLOT_SNAPSHOT_SETTLE_S = 0.05
+
+
 class ScanRunRecorder:
     """A scan's run folder, live CSV and JSON-lines log, for every scan page
     (user, 2026-10-18); SHV's recorder generalised.
@@ -18806,8 +18818,11 @@ class CombinedControlApp:
         # thread (user, 2026-10-21).
         self.stfmr_resource_vars["lakeshore"] = tk.StringVar(value=LAKESHORE_MAGNET_MODELS["648"]["resource"])
         self.stfmr_device_connection_vars["lakeshore"] = tk.StringVar(value="Not connected")
-        self.stfmr_magnet_choice = MAGNET_SUPPLY_KEPCO
-        self.stfmr_magnet_choice_var = tk.StringVar(value=STFMR_FMR_MAGNET_CHOICES[0])
+        # The Lake Shore 648 by default (user, 2026-11-13: "change the default
+        # settings as the figure": LS648 at GPIB0::15, LS475 at GPIB0::12, PNA
+        # at GPIB0::16); the KEPCO 4886 stays one choice away.
+        self.stfmr_magnet_choice = "LS648"
+        self.stfmr_magnet_choice_var = tk.StringVar(value=STFMR_FMR_MAGNET_CHOICES[1])
         self.stfmr_magnet_rate_var = tk.StringVar(value=f"{LAKESHORE_DEFAULT_RATE_A_S:g}")
         self.stfmr_magnet_rate_a_s = LAKESHORE_DEFAULT_RATE_A_S
         # How many Lake Shore Apply, Read or Zero jobs are queued or run.
@@ -20933,7 +20948,7 @@ class CombinedControlApp:
             device.columnconfigure(6, weight=1000)
             if key == "kepco":
                 # The magnet supply's row (user, 2026-10-21): its label is the
-                # choice, KEPCO4886 (the default) or LS648, and the row shows
+                # choice, KEPCO4886 or LS648 (the default since 2026-11-13), and the row shows
                 # the chosen supply's widgets in the same place.
                 choice = ttk.Combobox(device, textvariable=self.stfmr_magnet_choice_var,
                                       values=STFMR_FMR_MAGNET_CHOICES, state="readonly", width=10)
@@ -21267,6 +21282,10 @@ class CombinedControlApp:
             lambda _event: self._redraw_stfmr_frequency_plot(),
             add="+",
         )
+        # The rows and the output panel for the start-up supply, the Lake
+        # Shore 648 since 2026-11-13 (user); the KEPCO's are already shown.
+        if self._stfmr_lakeshore_chosen():
+            self._stfmr_show_magnet_choice()
         self._redraw_stfmr_fmr_plot()
         self._redraw_stfmr_frequency_plot()
 
@@ -21897,6 +21916,8 @@ class CombinedControlApp:
 
         plots = ttk.Frame(outer)
         plots.grid(row=4, column=0, sticky="nsew")
+        # A sweep's end saves one picture of the four plots (user, 2026-11-13).
+        self.stfmr_lockin_plots_frame = plots
         plots.columnconfigure(0, weight=1, uniform="stfmr_lockin_plot")
         plots.columnconfigure(1, weight=1, uniform="stfmr_lockin_plot")
         plots.rowconfigure(0, weight=1)
@@ -26331,6 +26352,12 @@ class CombinedControlApp:
                       + ", ".join(swept))
         outcome = "error" if error is not None else "stopped" if stopped else "completed"
         shutdown_errors = [f"{label}: {results.get(label, 'not reported')}" for label in failed]
+        # The X, Y, θ and field-vs-current plots as they ended, one picture,
+        # into the run folder before its log is closed (user, 2026-11-13).
+        self.save_scan_plot_snapshots(
+            recorder, (("plots", self.__dict__.get("stfmr_lockin_plots_frame")),), points=saved,
+            redraw=self._redraw_stfmr_lockin_plots_for_snapshot,
+        )
         recording_errors = self._close_stfmr_lockin_recording(
             outcome,
             error=str(error) if error is not None else None,
@@ -26359,6 +26386,11 @@ class CombinedControlApp:
         elif failed:
             message = f"The sweep {outcome}.\n\nAt the end: {lines}{stage_line}{check}"
             self._stfmr_lockin_after_drain(lambda: messagebox.showerror("STFMR outputs", message, parent=self.root))
+
+    def _redraw_stfmr_lockin_plots_for_snapshot(self) -> None:
+        """The four plots brought up to the last point, for the end's picture."""
+        self._redraw_stfmr_lockin_live_plots()
+        self._redraw_stfmr_lockin_plot()
 
     def _redraw_stfmr_lockin_plot(self) -> None:
         canvas = self.stfmr_lockin_canvas
@@ -27636,6 +27668,12 @@ class CombinedControlApp:
         problems = []
         if recorder is not None:
             recorder.event("outputs_zeroed", **{label: results.get(label, "not reported") for label in order})
+            # The scan's plot as it ended, into the run folder before its log
+            # is closed (user, 2026-11-13).
+            canvas, redraw = (("stfmr_fmr_canvas", self._redraw_stfmr_fmr_plot) if kind == "fmr"
+                              else ("stfmr_frequency_canvas", self._redraw_stfmr_frequency_plot))
+            self.save_scan_plot_snapshots(recorder, (("plot", self.__dict__.get(canvas)),), points=points,
+                                          redraw=redraw)
             problems = recorder.close(
                 outcome, points_saved=points, points_planned=total, status=status, outputs=dict(results),
                 error=str(error) if error is not None else None,
@@ -33504,6 +33542,85 @@ class CombinedControlApp:
             # No DwmFlush to wait on: give the compositor a few frames.
             time.sleep(0.05)
 
+    def save_scan_plot_snapshots(self, recorder, plots, *, points: int = 1, redraw=None) -> str:
+        """A scan's plots as they show on the screen, saved in its run folder
+        when it ends (user, 2026-11-13: "all program when finish scanning,
+        auto save the screenshot of axis plot").  Gate-VI did already; MOKE
+        magnet and MOKE-24 only on their "Save CSV + PNG".  Called on the Tk
+        thread in the scan's finish, before its run log is closed and before
+        any dialog can cover the plots.
+
+        plots is ((suffix, widget), ...): a canvas, or the frame that holds a
+        page's grid of plots.  Each is saved as <run folder>/<run
+        name>_<suffix>_snapshot.png (_01, _02 ... when the name is taken:
+        nothing is overwritten).  redraw() first brings the plots up to the
+        last point.  Nothing is saved for a run without a saved point,
+        without a run folder (the worker on its own, as the unit tests run
+        it), on a page whose plots are not built, or while the program
+        closes.
+
+        A screenshot holds only what is on the screen: a page that is not
+        the one shown is not saved, and the run log says why.  Never raises,
+        so a finish always goes on to its status and its buttons.  The run
+        log gets plot_snapshots (saved, the files, the error), the page log
+        one line.  Returns "" or a status line's tail, "; plot snapshot save
+        failed: <why>"."""
+        try:
+            if recorder is None or recorder.closed or int(points) <= 0 or self.closing:
+                return ""
+            directory = Path(recorder.directory)
+            stem = directory.name
+            plots = [(suffix, widget) for suffix, widget in plots if widget is not None]
+            if not plots:
+                return ""
+        except BaseException:
+            return ""
+        saved: list[str] = []
+        failed: list[str] = []
+        try:
+            if redraw is not None:
+                redraw()
+            # The last point was drawn just now: a short fixed wait lets it
+            # reach the screen before the grab.  Not wait_for_drawing_on_screen:
+            # that waits for the compositor's next frame (DwmFlush), which at
+            # an unattended scan's end, the monitor asleep or the session
+            # disconnected, might not come, and the page would hang (review,
+            # 2026-11-13).
+            self.root.update_idletasks()
+            if sys.platform == "win32":
+                # Tk's drawing may still sit in this thread's GDI batch.
+                ctypes.windll.gdi32.GdiFlush()
+            time.sleep(SCAN_PLOT_SNAPSHOT_SETTLE_S)
+        except BaseException:
+            pass    # the plots are saved as they are shown
+        for suffix, widget in plots:
+            try:
+                path = directory / f"{stem}_{suffix}_snapshot.png"
+                number = 0
+                while path.exists():
+                    number += 1
+                    path = directory / f"{stem}_{suffix}_snapshot_{number:02d}.png"
+                self.save_plot_canvas_snapshot(widget, path)
+                saved.append(path.name)
+            except BaseException as error:
+                # The whole reason on one line (short_status_error would cut
+                # "The plot is not visible; cannot capture ..." at its ";").
+                failed.append(f"{suffix}: {' '.join(str(error).split())[:160]}")
+        problem = "; ".join(failed)
+        try:
+            recorder.event("plot_snapshots", saved=not failed, files=saved, error=problem)
+        except BaseException:
+            pass
+        try:
+            self.thread_log(
+                f"{recorder.label} plot snapshot: "
+                + (", ".join(saved) + " saved" if saved else "none saved")
+                + (f"; save failed: {problem}" if failed else "")
+            )
+        except BaseException:
+            pass
+        return f"; plot snapshot save failed: {failed[0]}" if failed else ""
+
     def select_csv_save_directory(
         self,
         title: str,
@@ -36600,6 +36717,9 @@ class CombinedControlApp:
             self.magnet_scan_collecting = False
             self.magnet_scan_active_key = None
         self.magnet_auto_poll_var.set(True)
+        # The scan's Current / Field–ROI plot into the run folder, before
+        # its log is closed (user, 2026-11-13).
+        self._snapshot_magnet_scan_plot()
         # Every ending zeroed the KEPCOs on the worker (user, 2026-10-18):
         # the status says how; the log's run_finished and its close come
         # before any dialog, which opens from the Tk event loop.
@@ -36637,6 +36757,42 @@ class CombinedControlApp:
         self._update_keithley_controls()
         self._update_k6221_controls()
         self._update_moke_roi_controls()
+
+    def _snapshot_magnet_scan_plot(self) -> None:
+        """The ending MOKE current scan's Current / Field–ROI plot into its
+        run folder (user, 2026-11-13: every scan saves a screenshot of its
+        plot when it ends; it was saved only by "Save CSV + PNG").  The
+        page's plot may be showing the other channel, so the scan is drawn
+        for the picture, as "Save CSV + PNG" draws it, and the page's plot
+        is drawn again afterwards.  Never raises."""
+        try:
+            with self.magnet_scan_data_lock:
+                rows = list(self.magnet_scan_rows)
+            scan_key = self.magnet_scan_settings.get("scan.channel_key")
+            scan_plot = (
+                (scan_key, [(row[0], row[4], row[5], row[6], row[7]) for row in rows])
+                if scan_key in MAGNET_CHANNEL_LABELS
+                else None
+            )
+
+            def draw() -> None:
+                self.moke_plot_override = scan_plot
+                self._redraw_moke_plot()
+
+            self.save_scan_plot_snapshots(
+                self.__dict__.get("magnet_scan_recorder"), (("plot", self.__dict__.get("moke_plot_canvas")),),
+                points=len(rows), redraw=draw,
+            )
+        except BaseException:
+            pass
+        finally:
+            try:
+                if self.__dict__.get("moke_plot_override") is not None:
+                    # Back to what the page shows.
+                    self.moke_plot_override = None
+                    self._redraw_moke_plot()
+            except BaseException:
+                pass
 
     def stop_magnet_scan(self, button: str = "Stop/zero") -> None:
         if not self.magnet_scan_running:
@@ -38237,6 +38393,13 @@ class CombinedControlApp:
             with self.keithley_data_lock:
                 self.keithley_current_voltage = math.nan
             self.keithley_voltage_var.set(f"Output: check the {model}")
+        # The Voltage–ROI plot as it ended, into the run folder before its
+        # log is closed (user, 2026-11-13: every scan saves a screenshot of
+        # its plot when it ends; it was saved only by "Save CSV + PNG").
+        self.save_scan_plot_snapshots(
+            self.__dict__.get("keithley_scan_recorder"), (("plot", self.__dict__.get("keithley_plot_canvas")),),
+            points=len(self.keithley_step_rows), redraw=self._redraw_keithley_plot,
+        )
         status = self._finish_scan_run(
             "keithley_scan_recorder", page="MOKE-24", title="MOKE-24", error=error, stopped=stopped,
             results=results, labels=(model,), points=len(self.keithley_step_rows),
@@ -43460,6 +43623,15 @@ class CombinedControlApp:
             )
         return outcome, status
 
+    def _nonlocal_save_plot_snapshots(self, plots, redraw) -> str:
+        """The ending Non-local scan's plots into its run folder, as Gate-VI's
+        (user, 2026-11-13): before _nonlocal_end_scan, which closes the run
+        log.  Returns the tail for the page's status line ("" when saved)."""
+        return self.save_scan_plot_snapshots(
+            self.__dict__.get("nonlocal_recorder"), plots,
+            points=int(self.__dict__.get("nonlocal_run_points") or 0), redraw=redraw,
+        )
+
     # |R| vs time ---------------------------------------------------------
 
     def start_nonlocal_resistance(self) -> None:
@@ -43782,10 +43954,13 @@ class CombinedControlApp:
 
     def _finish_nonlocal_resistance(self, future) -> None:
         self.nonlocal_keithley_task = None
+        # The plot as it ended, into the run folder (user, 2026-11-13).
+        snapshot_note = self._nonlocal_save_plot_snapshots(
+            (("plot", self.__dict__.get("nonlocal_resistance_canvas")),), self._redraw_nonlocal_resistance_plot)
         # The scan's end zeroed the Keithley and the 6221 on the worker
         # (user, 2026-10-18); the status and the output lines say how.
         _outcome, status = self._nonlocal_end_scan("resistance", self._nonlocal_future_error(future))
-        self.nonlocal_vi_status_var.set(status)
+        self.nonlocal_vi_status_var.set(status + snapshot_note)
         try:
             self._redraw_nonlocal_resistance_plot()
         finally:
@@ -44275,12 +44450,16 @@ class CombinedControlApp:
     def _finish_nonlocal_iv_sweep(self, future) -> None:
         self.nonlocal_keithley_task = None
         self.nonlocal_iv_eta_var.set("Remaining: --")
+        # The plot as it ended, into the run folder (user, 2026-11-13);
+        # "Save plot PNG" still saves it again on request.
+        snapshot_note = self._nonlocal_save_plot_snapshots(
+            (("plot", self.__dict__.get("nonlocal_iv_canvas")),), self._redraw_nonlocal_iv_plot)
         # The scan's end zeroed the Keithley and the 6221 on the worker
         # (user, 2026-10-18); the status and the output lines say how.
         _outcome, status = self._nonlocal_end_scan(
             "iv", self._nonlocal_future_error(future), total=self.nonlocal_iv_total_points
         )
-        self.nonlocal_vi_status_var.set(status)
+        self.nonlocal_vi_status_var.set(status + snapshot_note)
         try:
             self._redraw_nonlocal_iv_plot()
         finally:
@@ -45551,6 +45730,10 @@ class CombinedControlApp:
     def _finish_nonlocal_iv6221(self, future) -> None:
         self.nonlocal_keithley_task = None
         error = self._nonlocal_future_error(future)
+        # The X / Y / θ rows as they ended, one picture of the plot box, into
+        # the run folder (user, 2026-11-13).
+        snapshot_note = self._nonlocal_save_plot_snapshots(
+            (("plots", self.__dict__.get("nonlocal_iv6221_plot_container")),), self._redraw_nonlocal_iv6221_plots)
         # The scan's end zeroed the 6221 and the Keithley on the worker
         # (user, 2026-10-18): the status and the output lines say how, and
         # the 6221 counts as OFF only read back off.
@@ -45566,7 +45749,7 @@ class CombinedControlApp:
         # The box's own line: the outcome and the outputs (the points and the
         # run folder are on the page's status line).
         self.nonlocal_iv6221_status_var.set(self.__dict__.get("nonlocal_end_line", ""))
-        self.nonlocal_vi_status_var.set(status)
+        self.nonlocal_vi_status_var.set(status + snapshot_note)
         try:
             self._redraw_nonlocal_iv6221_plots()
         finally:
@@ -49240,6 +49423,12 @@ class CombinedControlApp:
         # A Macro goes on only after a completed scan whose 6221 read back off.
         self.ppms_macro_scan_result = outcome == "completed" and outputs_confirmed
         rows = self.__dict__.get("ppms_field_scan_rows") or ()
+        # The plots as they ended, one picture of the plot box, into the run
+        # folder before its log is closed (user, 2026-11-13).
+        self.save_scan_plot_snapshots(
+            self.__dict__.get("ppms_run_recorder"), (("plots", self.__dict__.get("ppms_plot_frame")),),
+            points=len(rows), redraw=self._redraw_ppms_transport_plot,
+        )
         problems = self._ppms_close_run(
             outcome, points_saved=len(rows), status=status, outputs=results,
             error=str(error) if error is not None else "",
@@ -56659,6 +56848,12 @@ class RTEPanel(PPMSPanel):
                     self.thread_log('SHV scan ' + status + (f'; {where}' if where else ''))
                 if angle and outcome != 'error':
                     status += f'; {self.rte_stage_where}'     # where the stage is (user, 2026-10-13)
+                # The plots as they ended, one picture of the plot box, into
+                # the run folder before its log is closed (user, 2026-11-13).
+                if not self.rte_closed:
+                    self.save_scan_plot_snapshots(
+                        self.__dict__.get('rte_recorder'), (('plots', self.__dict__.get('ppms_plot_frame')),),
+                        points=len(self.ppms_field_scan_rows), redraw=self._redraw_ppms_transport_plot)
                 # The log's last entry and its close, on every way a scan ends,
                 # before any dialog (user, 2026-10-18): the outcome, the error
                 # or why it stopped, the points saved, the finish status (what

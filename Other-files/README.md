@@ -1,5 +1,41 @@
 # Magneto-Electro-Optical Transport Experiment Control Directory
 
+## Every scan saves a picture of its plots; FMR starts on the LS648 (user, 2026-11-13)
+
+- **Plot pictures** (user: "all program when finish scanning, auto save the screenshot of axis plot"). Only Gate-VI
+  saved a screenshot of its plots at a scan's end; MOKE magnet and MOKE-24 saved one only with "Save CSV + PNG".
+  Now MOKE magnet, MOKE-24, PPMS, SHV, FMR's field scan and frequency sweep, ST-FMR, and Non-local's 2400-IV,
+  6221-IV and |R| vs time do too, through one routine, `save_scan_plot_snapshots`:
+  - **File:** `<run folder>/<run name>_plot_snapshot.png` for a page with one plot (MOKE magnet, MOKE-24, FMR,
+    2400-IV, |R| vs time);
+    `<run name>_plots_snapshot.png`, one picture of the whole plot box, for a page with a grid of plots (PPMS, SHV,
+    6221-IV, ST-FMR). A name in use gets `_01`, `_02` ...; nothing is overwritten.
+  - **When:** in the scan's finish on the Tk thread, after the outputs were zeroed, before the run log is closed and
+    before any dialog can cover the plots; the plots are redrawn first and given 0.05 s to reach the screen, so the
+    last point is in the picture. Every ending counts (completed, stopped, failed) if at least one point was saved.
+    The wait is a fixed one, not the compositor wait of "Save CSV + PNG" (`DwmFlush`), which could hold the page
+    at an unattended scan's end with the monitor asleep (review).
+  - **MOKE magnet:** its plot may be showing the other channel, so the scan is drawn for the picture, as
+    "Save CSV + PNG" draws it, and the page's plot is drawn again afterwards.
+  - **Run log:** a `plot_snapshots` entry (saved, the files, the error) just before `run_finished`; the page log gets
+    one line.
+  - **It is a screenshot** (`save_plot_canvas_snapshot`, as before): it holds what is on the screen. If the scan's
+    page is not the one shown, nothing is saved and the entry says "The plot is not visible; cannot capture a
+    snapshot"; Non-local's status line says so too, as Gate-VI's did. A window lying over the plots (the PPMS Macro
+    window, a screensaver) is in the picture, and a locked PC saves none. A failure never stops the finish: the
+    status, the dialogs and the buttons are as before.
+  - **Not changed:** the CIDWM pulse scan has no axis plot (it saves camera images). MS-fourState already saves its
+    plot (EPS) at a run's end. "Save plot PNG" on 2400-IV and "Save CSV + PNG" on the MOKE pages still work.
+- **FMR start-up connections** (user: "change the default settings as the figure", a picture of the page): the
+  magnet supply is the Lake Shore 648 (it was the KEPCO 4886) at `GPIB0::15::INSTR` (the LS648's default was
+  `GPIB0::10::INSTR`); the LS475 stays at `GPIB0::12::INSTR` and the PNA at `GPIB0::16::INSTR`. The KEPCO 4886 is
+  one choice away, as on SHV and ST-FMR since 2026-10-23. Not changed: three FMR texts still name the KEPCO or the
+  4886 whichever supply is chosen (the safety tick, the scan box's title, the frequency sweep's voltage-limit error).
+- **Tests:** `test_scan_plot_snapshots.py` (the routine, and each page's finish through its existing harness);
+  `test_panel_defaults.py` (on GitHub, with the real window: the FMR defaults, and a real screen grab of the PPMS
+  plot box and the FMR canvas). The PPMS and SHV tests that list a run log's entries now expect `plot_snapshots`;
+  `test_stfmr_field_output.py` chooses the KEPCO on the FMR page for its 4886 tests, as it does on ST-FMR.
+
 ## Windows .exe built by GitHub Actions (user, 2026-11-10)
 
 - **Publisher** (user, 2026-11-12): the spec gives the .exe version information, with the company name

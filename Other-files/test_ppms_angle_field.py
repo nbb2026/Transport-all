@@ -397,10 +397,13 @@ class SequenceTests(unittest.TestCase):
         page = AngleFieldPage(self).start()
         panel = page.panel
         self.assertEqual(sorted(p.name for p in panel.ppms_run_folder.iterdir()), ["run1.csv", "run1.log"])
+        # plot_snapshots: the end's picture of the plots, before the log is
+        # closed (user, 2026-11-13); this page has no screen, so the entry
+        # says why none was saved.
         self.assertEqual(page.names(), ["run_prepared", "scan_started", "harmonic_pass",
                                         "field_step", "point_saved", "point_saved",
                                         "field_step", "point_saved", "point_saved",
-                                        "outputs_zeroed", "run_finished"])
+                                        "outputs_zeroed", "plot_snapshots", "run_finished"])
         events = page.events()
         steps = [e for e in events if e["event"] == "field_step"]
         self.assertEqual([(e["index"], e["count"], e["target_field_oe"], e["rate_oe_s"], e["mode"]) for e in steps],
@@ -445,7 +448,8 @@ class EndingTests(unittest.TestCase):
         self.assertEqual(page.rig.source.output, 0)
         self.assertEqual(panel.ppms_field_scan_status_var.get(), "Stopped; 6221 zeroed; field kept at its setpoint")
         self.assertEqual(page.dialogs, [])
-        self.assertEqual(page.names()[-4:], ["point_saved", "stop_requested", "outputs_zeroed", "run_finished"])
+        self.assertEqual(page.names()[-5:], ["point_saved", "stop_requested", "outputs_zeroed", "plot_snapshots",
+                                             "run_finished"])
         self.assertEqual(page.events()[-1]["outcome"], "stopped")
 
     def test_stop_during_a_field_ramp_keeps_the_field(self):
@@ -504,7 +508,7 @@ class EndingTests(unittest.TestCase):
         self.assertTrue(text.endswith("At the end: 6221 zeroed; field ramping to 0 Oe"), text)
         events = page.events()
         self.assertEqual(events[-1]["outcome"], "error")
-        self.assertEqual(page.names()[-2:], ["outputs_zeroed", "run_finished"])
+        self.assertEqual(page.names()[-3:], ["outputs_zeroed", "plot_snapshots", "run_finished"])
 
     def test_a_refused_zero_says_check_multivu(self):
         page = AngleFieldPage(self)

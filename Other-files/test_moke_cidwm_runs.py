@@ -124,7 +124,9 @@ class MagnetScanRunTests(Folder):
                      "_update_moke_roi_controls", "_append_magnet_scan_point", "_update_magnet_scan_controls"):
             setattr(a, name, mock.Mock())
         a._scan_outputs_detail = C._scan_outputs_detail
-        bind(a, "_finish_magnet_scan", "_finish_scan_run", "_close_scan_recorder", "stop_magnet_scan")
+        bind(a, "_finish_magnet_scan", "_finish_scan_run", "_close_scan_recorder", "stop_magnet_scan",
+             # The end's picture of the plot (user, 2026-11-13); this page has no plot.
+             "_snapshot_magnet_scan_plot", "save_scan_plot_snapshots")
         run_dialogs_now(a)
         a.points = list(points)
         return a

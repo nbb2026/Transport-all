@@ -167,6 +167,41 @@ the Lake Shore 648 as its magnet supply at `GPIB0::15::INSTR`, the Lake Shore
 **STFMR** sweeps field with a
 microwave source and lock-in detection, with MFLI, SR830 or both together.
 
+**Setting a field.** FMR, SHV and STFMR each have a "Set field" control
+(since 2026-11-14): type the target in G and its tolerance, tick the page's
+safety confirmation, and press Set field. The program steps the page's chosen
+magnet supply (the KEPCO 4886 or its Lake Shore) until the Lake Shore 475
+reads the target within the tolerance, then leaves the current there.
+- **Where:** in the field-output box on FMR (a row of its own) and STFMR
+  (right of the safety tick); in the instrument rack under the LS475's
+  reading on SHV.
+- **How:** it first makes a small probe step (0.02 A, then 0.1 and 0.5 A if
+  the field did not move) to measure how many G the magnet gives per A and in
+  which direction. Then each correction is a PID step on the field error.
+  The first corrections are at most 0.5 A; while the field follows as
+  predicted the limit doubles, up to a tenth of the supply's maximum current.
+- **Reading the field:** after every step it waits 0.5 s, then reads the
+  LS475 in groups of three until two groups in a row agree within the
+  tolerance. A field that is still moving is waited for, up to 15 s.
+- **Stopping:** the page's red Zero / OFF ends it and zeroes the supply.
+- **When it gives up** it leaves the current where the last step put it and
+  says why:
+  - the gaussmeter did not respond to the probe steps, or sees under 20 G per
+    A, as a probe outside the magnet's gap does (the current has then moved
+    0.62 A at most);
+  - the field stopped following the current;
+  - the field did not settle within 15 s, or the readings are noisier than
+    the tolerance;
+  - the target needs more than the supply's maximum current;
+  - the tolerance is finer than one 1 mA setpoint step;
+  - a Lake Shore supply is not at its setpoint (stopped mid-ramp): Apply
+    output or Zero / OFF it first.
+- **It trusts the gaussmeter.** A probe that keeps reading consistently but
+  wrongly (slipped partly out of the gap, on the wrong range) is followed, up
+  to the supply's maximum current. Check the probe before a large field, and
+  keep the supply's own current limit set for your magnet.
+- The scans are unchanged: they still set currents, not fields.
+
 **Plot pictures.** Every scan saves a screenshot of its plots in its run
 folder when it ends, whether it completed, was stopped or failed, as long as
 it saved at least one point (since 2026-11-13; Gate-VI did already, and MOKE

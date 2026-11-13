@@ -628,6 +628,29 @@ class PanelDefaultTests(unittest.TestCase):
             a._stfmr_magnet_choice_changed()
         self.assertEqual(a.stfmr_magnet_choice, "LS648")
 
+    def test_fmr_stfmr_and_shv_have_a_field_setting(self):
+        """Set field (user, 2026-11-14: "Add a magnetic field setting in FMR,
+        SHV, STFMR modules"): each page has the target and tolerance boxes
+        (0 G, ± 2 G) and the button.  On FMR and ST-FMR it waits, as Apply
+        output does, for the supply, and for the LS475 it is set against;
+        on SHV it is one of the rack's inputs, locked while the rack is busy."""
+        a, shv = self.app, self.app.rte_panel
+        self.assertEqual((a.stfmr_field_target_var.get(), a.stfmr_field_tolerance_var.get()), ("0", "2"))
+        self.assertEqual((a.stfmr_lockin_field_target_var.get(), a.stfmr_lockin_field_tolerance_var.get()),
+                         ("0", "2"))
+        self.assertEqual((shv.rte_field_target.get(), shv.rte_field_tolerance.get()), ("0", "2"))
+        buttons = (a.stfmr_set_field_button, a.stfmr_lockin_set_field_button, shv.rte_set_field_button)
+        self.assertEqual([str(button.cget("text")) for button in buttons], ["Set field"] * 3)
+        # Nothing is connected at start-up.
+        self.assertEqual([str(button.cget("state")) for button in buttons[:2]], ["disabled", "disabled"])
+        self.assertIn(shv.rte_set_field_button, [widget for widget, _state in shv.rte_field_set_widgets])
+        self.assertEqual(str(shv.rte_set_field_button.cget("state")), str(shv.rte_apply_button.cget("state")))
+        # The buttons sit in their pages' field panels: FMR's and ST-FMR's
+        # field-output boxes (ST-FMR's beside the safety tick, so the panel
+        # is no taller), SHV's rack beside the LS475's reading.
+        self.assertIs(a.stfmr_set_field_button.master.master, a.stfmr_field_output_frame)
+        self.assertIs(a.stfmr_lockin_set_field_button.master.master.master, a.stfmr_lockin_field_output_frame)
+
     def test_every_lock_in_time_constant_box_starts_at_1_s(self):
         """User, 2026-10-14: "all default lock-in time constant change to
         1s".  The PPMS and RT-E Zurich TC, the Non-local rack's Zurich TC and

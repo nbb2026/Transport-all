@@ -1,5 +1,78 @@
 # Magneto-Electro-Optical Transport Experiment Control Directory
 
+## A magnetic-field setting on FMR, SHV and ST-FMR (user, 2026-11-14)
+
+User: "Add a magnetic field setting in FMR, SHV, STFMR modules. You can try to use PID to control the magnetic field
+value." Each page now has a **Set field** control: the target in G, its tolerance (default ± 2 G) and a button. The
+page's chosen magnet supply is stepped on the page's worker until the LS475 reads the target within the tolerance,
+and the current is then left there. **Not tested with instruments.**
+
+- **Where:** FMR: a fourth row of the field-output box ("Target field G", "Tol. G", Set field). ST-FMR: in that box
+  right of the safety tick ("Field G", "±", Set field): a row of its own cost each plot 13 px in the 1101 px window,
+  under their 55 px minimum (CI on Windows). SHV: in the rack beside the 6221's row, under the LS475's reading, so
+  the page keeps its height.
+- **The controller** (`MagnetFieldPID`, no I/O):
+  - **G per A is measured, never assumed.** A probe step of 0.02 A; if the field has moved by less than 0.5 G or five
+    times the scatter of the readings, 0.1 A more, then 0.5 A more. The wiring's polarity comes with it. Under
+    `MAGNET_FIELD_SET_MIN_G_PER_A` (20 G/A) it is refused: a probe beside the gap, or on another magnet, gives a few
+    G per A, and following that would take the current to the supply's maximum (review). Every later change of the
+    current that is large enough updates it, and the minimum holds there too (a first probe that over-read must not
+    let a weaker coupling through).
+  - **What it cannot know:** it trusts the LS475. A meter that keeps answering consistently but wrongly (the probe
+    slipping half out of the gap, a range change that halves the reading) is followed, up to the supply's maximum
+    current. The supply's own limit (the 4886's ±10 A, the Lake Shore's LIMIT?) is the last guard.
+  - **Each correction is a PID step** on the field error, divided by G per A, so the gains have no unit and do not
+    depend on the magnet: `MAGNET_FIELD_SET_KP` 0, `KI` 0.8, `KD` 0. Each step waits for the field to settle,
+    where the integral term alone is the exact step: 1.0 would take the whole error at once, and 0.8 leaves room
+    for a saturating magnet and for noise. P and D are there for a magnet that needs them.
+  - **The settled field** (`read_settled_magnet_field`): 0.5 s after a step, groups of three readings 0.1 s apart,
+    0.3 s between groups, until two groups in a row agree (each one's spread and the change of their means within
+    the tolerance, or 0.2 % of the field if that is more). After 15 s without that it gives up: a field still
+    moving, or readings noisier than the tolerance, never count as the field (review: "Field set" was declared on
+    the first reading inside the tolerance, also while the field was still moving).
+  - **Every change of the current is checked** against the field change it should have made, small steps together
+    once they add up. The scatter that counts is that of the readings at the two ends of the change (review: it
+    was the largest scatter of the whole run, so one noisy reading switched the check off and the loop could walk
+    to the supply's maximum).
+  - **Step size:** at most 0.5 A at first (the Gauss zeroing's limit). A step whose field change was within 30 % of
+    the predicted one doubles the limit, up to a tenth of the supply's maximum current (1 A on the 4886, 4 A on
+    the LS643, 10 A on the LS648); any other step brings it back to 0.5 A. Setpoints are whole mA.
+  - **It gives up, the current left where it is,** when: the field did not answer the three probes, or answers with
+    under 20 G/A (the current has moved 0.62 A at most); two checks in a row found the field changed by under a
+    quarter of the predicted change, or the other way; the field did not settle; the target needs more than the
+    supply's maximum (refused from the measured G per A once a step has confirmed it, not after ramping to the
+    maximum); the tolerance is finer than one 1 mA step; or 30 + maximum / 0.5 A corrections were not enough.
+- **On a supply** (`run_magnet_field_set`):
+  - **KEPCO 4886:** an output this program has on in current mode is taken from where it is; one that is off is
+    switched on at 0 A with the page's voltage limit, as the fixed-field sweep's baseline; one on in voltage mode is
+    refused. On ST-FMR and SHV each write is made on the worker under the 4886's lock after the stop is checked
+    there, and Zero / OFF sets the stop before it takes that lock, so no write of the loop follows a Zero / OFF. A
+    zero that did not set the stop still cannot be undone: `set_scan_current` refuses once the output is off.
+  - **FMR's 4886 is written from the Tk thread only**, that page's rule for its session (a first transaction from a
+    worker thread can leave address 6 unresponsive): there the loop is driven from the Tk thread and only the LS475
+    is read on the worker (review: the first version wrote it from the worker).
+  - **Lake Shore 643 / 648:** from its SETI?, which it must be at (a supply stopped mid-ramp is refused: its first
+    small step would be a ramp across the whole difference); each step a ramp at the page's Rate A/s; a Stop ends a
+    ramp with STOP.
+- **On each page:** it needs the safety confirmation, the supply and the LS475 connected, and the page idle; bad
+  numbers are refused before anything is sent. The page is busy while it runs (FMR and ST-FMR: the magnet job count,
+  so Apply output, Start, a hand move and the supply choice wait; SHV: the rack is busy). The red Zero / OFF ends
+  it and zeroes the supply. A queued progress line no longer shows after a Zero / OFF.
+- **Two ST-FMR faults of the first version, found by the review before it shipped:**
+  - A Zero / OFF pressed while the worker held the 4886's lock is made again 200 ms later. That second press counted
+    as a sweep's, whose own end zeroes the 4886, and sent nothing: the magnet stayed on. It is now deferred only
+    behind a sweep; behind anything else it is a full press again.
+  - A field setting queued behind a slow job, then Zero / OFF, then Move stage: the move cleared the sweep's stop
+    event, the only thing holding the queued job, which then switched the 4886 on. The field setting now has its
+    own stop event as well (`stfmr_lockin_field_stop_event`, cleared only by the next Set field), and a hand move
+    is refused while a field setting of the 4886 is pending, as it was for the LS643.
+- **Not changed:** the scans still set currents; the fixed-field frequency sweep keeps its own field feedback.
+- **Tests:** `test_magnet_field_set.py` (the controller against simulated magnets: linear, saturating, noisy,
+  lagging, reversed wiring, a coarse gaussmeter, one that does not respond or responds weakly, one that sticks; and
+  the loop on a 4886 and a Lake Shore); `test_field_setting_pages.py` (each page, with a real worker thread for
+  Zero / OFF pressed while the worker writes, reads or has the job queued; both ST-FMR tests fail with the two
+  fixes above undone); `test_panel_defaults.py` (the three controls in the real window).
+
 ## Every scan saves a picture of its plots; FMR starts on the LS648 (user, 2026-11-13)
 
 - **Plot pictures** (user: "all program when finish scanning, auto save the screenshot of axis plot"). Only Gate-VI

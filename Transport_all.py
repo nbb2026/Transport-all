@@ -1764,6 +1764,54 @@ MAGNET_FIELD_ZERO_MAX_STEP_A = 0.500
 MAGNET_FIELD_ZERO_MAX_ITERATIONS = 12
 MAGNET_FIELD_ZERO_SETTLE_S = 0.30
 MAGNET_FIELD_ZERO_MIN_SLOPE_GS_PER_A = 1.0
+# The magnetic-field setting of the FMR, SHV and ST-FMR pages (user,
+# 2026-11-14: "Add a magnetic field setting in FMR, SHV, STFMR modules. You
+# can try to use PID to control the magnetic field value"): MagnetFieldPID
+# and set_magnet_field below.  The gains act on the field error in G and
+# are divided by the magnet's measured G per A, so they have no unit and do
+# not depend on the magnet.  Each correction waits for the field to settle,
+# where the integral term alone is the exact step (1.0 would be the whole
+# error at once; 0.8 leaves room for a magnet that saturates and for
+# noise); the proportional and derivative terms are 0 until a magnet
+# needs them.
+MAGNET_FIELD_SET_KP = 0.0
+MAGNET_FIELD_SET_KI = 0.8
+MAGNET_FIELD_SET_KD = 0.0
+# The probe steps that measure G per A, tried in turn until the field has
+# moved, from where it started, by more than MAGNET_FIELD_SET_MIN_RESPONSE_G
+# and five times the scatter of the readings.  A gaussmeter that does not
+# see this magnet moves the current by their sum, 0.62 A, at most.
+MAGNET_FIELD_SET_PROBES_A = (0.02, 0.1, 0.5)
+MAGNET_FIELD_SET_MIN_RESPONSE_G = 0.5
+# A magnet in whose gap the probe sits gives far more than this; a probe
+# beside the gap, or on another magnet, gives a few G per A, and following
+# that would take the current to the supply's maximum (review, 2026-11-14).
+MAGNET_FIELD_SET_MIN_G_PER_A = 20.0
+# A correction is at most this, as the Gauss zeroing's; each step whose field
+# change was the predicted one (within 30 %) doubles it, up to this fraction
+# of the supply's maximum current, and any other step brings it back.
+MAGNET_FIELD_SET_MAX_STEP_A = MAGNET_FIELD_ZERO_MAX_STEP_A
+MAGNET_FIELD_SET_MAX_STEP_FRACTION = 0.1
+# Two checks in a row in which the field changed by under a quarter of the
+# predicted change, or the other way, end it: it does not follow the current.
+MAGNET_FIELD_SET_MISSES = 2
+# Setpoints are whole mA: the Lake Shores' SETI resolution.
+MAGNET_FIELD_SET_RESOLUTION_A = 0.001
+# After each step: this wait, then groups of this many readings, this far
+# apart, until two groups in a row agree (each one's spread and the change
+# of their means within the tolerance, or 0.2 % of the field if that is
+# more); given up after this long, so a field that is still moving, or
+# readings noisier than the tolerance, never count as the field.
+MAGNET_FIELD_SET_SETTLE_S = 0.5
+MAGNET_FIELD_SET_READINGS = 3
+MAGNET_FIELD_SET_READ_INTERVAL_S = 0.1
+MAGNET_FIELD_SET_GROUP_GAP_S = 0.3
+MAGNET_FIELD_SET_SETTLE_TIMEOUT_S = 15.0
+MAGNET_FIELD_SET_SETTLE_REL_TOLERANCE = 0.002
+MAGNET_FIELD_SET_DEFAULT_TOLERANCE_G = 2.0
+# Corrections allowed: enough to cross the supply's whole range at the first
+# step size, and some to settle.
+MAGNET_FIELD_SET_EXTRA_STEPS = 30
 MAGNET_DEFAULT_PORTS = {
     "OUT_BOP": "COM14",
     "OUT_GAUSS": "COM13",
@@ -4758,6 +4806,373 @@ class MagnetSupply:
         value = (self.lakeshore_controller.read_current() if fresh
                  else getattr(self.lakeshore_controller, "current_a", math.nan))
         return value if isinstance(value, (int, float)) and math.isfinite(value) else ""
+
+
+class MagnetFieldError(RuntimeError):
+    """A field setting that could not reach its target; the magnet current
+    stays where the last step left it."""
+
+
+class MagnetFieldStopped(RuntimeError):
+    """A field setting ended by a Stop (Zero / OFF, or the page closing)."""
+
+
+class MagnetFieldPID:
+    """Which current to set next so that the gaussmeter reads a target field
+    (user, 2026-11-14).  No I/O: update() takes the settled field read at
+    the present current and returns the next current, or None once the
+    field is within the tolerance; set_magnet_field drives it.
+
+    - G per A is measured, never assumed: probe steps first (the wiring's
+      polarity comes with them), then every large enough change of the
+      current since the last check updates it.  Under
+      MAGNET_FIELD_SET_MIN_G_PER_A it is refused: the probe is not in
+      this magnet's gap.
+    - Each correction is a PID step on the field error, divided by G per A
+      (MAGNET_FIELD_SET_KP / KI / KD), at most ``step_limit_a`` and never
+      beyond ±``max_current_a``.
+    - Every change of the current is checked against the field change it
+      should have made, small steps together once they add up; the scatter
+      that counts is that of the readings at its two ends only (review,
+      2026-11-14: one noisy reading used to switch the check off).
+    - It ends with MagnetFieldError, the current left where it is, when the
+      field does not answer the probes, does not follow twice in a row,
+      needs more than the supply's maximum, needs a step finer than a
+      setpoint, or is not reached within ``max_steps`` corrections."""
+
+    def __init__(self, target_g, tolerance_g, max_current_a, *, supply: str = "magnet supply",
+                 kp: float = MAGNET_FIELD_SET_KP, ki: float = MAGNET_FIELD_SET_KI,
+                 kd: float = MAGNET_FIELD_SET_KD) -> None:
+        self.target_g, self.tolerance_g = float(target_g), abs(float(tolerance_g))
+        self.max_current_a = abs(float(max_current_a))
+        if not math.isfinite(self.target_g):
+            raise ValueError("The target field must be a finite number of G")
+        if not math.isfinite(self.tolerance_g) or self.tolerance_g <= 0.0:
+            raise ValueError("The field tolerance must be above 0 G")
+        if not math.isfinite(self.max_current_a) or self.max_current_a <= 0.0:
+            raise ValueError("The magnet supply's maximum current is not known")
+        self.supply = str(supply)
+        self.kp, self.ki, self.kd = float(kp), float(ki), float(kd)
+        self.slope_g_per_a: float | None = None
+        # Where the next check of the field against the current starts:
+        # (current, field, scatter).
+        self.anchor: tuple[float, float, float] | None = None
+        self.errors: list[float] = []
+        self.steps = 0
+        self.probes = 0
+        self.misses = 0
+        # True once a change of the current made the predicted field change:
+        # G per A is then trusted enough to refuse a target far beyond the
+        # maximum.
+        self.confirmed = False
+        self.step_limit_a = MAGNET_FIELD_SET_MAX_STEP_A
+        self.step_limit_max_a = max(MAGNET_FIELD_SET_MAX_STEP_A,
+                                    MAGNET_FIELD_SET_MAX_STEP_FRACTION * self.max_current_a)
+        self.max_steps = MAGNET_FIELD_SET_EXTRA_STEPS + math.ceil(self.max_current_a / MAGNET_FIELD_SET_MAX_STEP_A)
+
+    def update(self, current_a, field_g, scatter_g: float = 0.0) -> float | None:
+        """The next current (A, a whole mA), or None: within the tolerance."""
+        current, field = float(current_a), float(field_g)
+        if not math.isfinite(current) or not math.isfinite(field):
+            raise MagnetFieldError(f"The gaussmeter reading at {current:+g} A is not a number ({field!r})")
+        scatter = abs(float(scatter_g))
+        if not math.isfinite(scatter):
+            scatter = 0.0
+        error = self.target_g - field
+        self.errors = (self.errors + [error])[-3:]
+        if abs(error) <= self.tolerance_g:
+            return None
+        if self.steps >= self.max_steps:
+            raise MagnetFieldError(
+                f"Target {self.target_g:+g} G ± {self.tolerance_g:g} G not reached after {self.steps} corrections; "
+                f"the field at {current:+g} A is {field:+.6g} G")
+        self.steps += 1
+        if self.anchor is None:
+            self.anchor = (current, field, scatter)
+        else:
+            self._learn(current, field, scatter)
+        if self.slope_g_per_a is None:
+            return self._probe(current, field, scatter)
+        return self._correct(current, field, error)
+
+    def _learn(self, current: float, field: float, scatter: float) -> None:
+        """G per A from the change of the current since the last check, and
+        whether the field followed it."""
+        anchor_a, anchor_g, anchor_scatter = self.anchor
+        delta_a, delta_g = current - anchor_a, field - anchor_g
+        if abs(delta_a) < 0.5 * MAGNET_FIELD_SET_RESOLUTION_A:
+            return
+        # The smallest field change that counts as the magnet's answer.
+        floor = max(MAGNET_FIELD_SET_MIN_RESPONSE_G, 5.0 * max(scatter, anchor_scatter))
+        if self.slope_g_per_a is None:
+            # The probes add up from where they started.
+            if abs(delta_g) < floor:
+                return
+            slope = delta_g / delta_a
+            if abs(slope) < MAGNET_FIELD_SET_MIN_G_PER_A:
+                raise MagnetFieldError(
+                    f"The gaussmeter sees only {abs(slope):.3g} G per A of the {self.supply} current ({delta_g:+.3g} G "
+                    f"for {delta_a:+.3f} A), under the {MAGNET_FIELD_SET_MIN_G_PER_A:g} G per A a probe in the "
+                    "magnet's gap gives. Check the probe's position and that it is this magnet's")
+            self.slope_g_per_a, self.anchor = slope, (current, field, scatter)
+            return
+        expected = self.slope_g_per_a * delta_a
+        if abs(expected) < 2.0 * floor:
+            return      # checked once the steps add up to more
+        self.anchor = (current, field, scatter)
+        ratio = delta_g / expected
+        if ratio < 0.25:
+            self.misses += 1
+            self.step_limit_a = MAGNET_FIELD_SET_MAX_STEP_A
+            if self.misses >= MAGNET_FIELD_SET_MISSES:
+                raise MagnetFieldError(
+                    f"The field does not follow the {self.supply} current: the last {delta_a:+.3f} A should have "
+                    f"changed it by about {expected:+.4g} G and changed it by {delta_g:+.4g} G. Check the "
+                    "gaussmeter probe's position and range, the magnet's wiring and the supply's front panel")
+            if ratio > 0.0 and abs(delta_g) >= floor and abs(delta_g / delta_a) >= MAGNET_FIELD_SET_MIN_G_PER_A:
+                self.slope_g_per_a = delta_g / delta_a      # a magnet that is saturating
+            return
+        self.misses = 0
+        slope = delta_g / delta_a
+        if abs(slope) < MAGNET_FIELD_SET_MIN_G_PER_A:
+            # Also later: a first probe step that over-read (a display step,
+            # noise) let a weaker coupling through, and this larger change
+            # shows what it really is (review, 2026-11-14).
+            raise MagnetFieldError(
+                f"The field now changes by only {abs(slope):.3g} G per A of the {self.supply} current ({delta_g:+.4g} G "
+                f"for {delta_a:+.3f} A), under the {MAGNET_FIELD_SET_MIN_G_PER_A:g} G per A a probe in the magnet's "
+                "gap gives: the probe is not in this magnet's gap, or the magnet is saturating")
+        self.slope_g_per_a = slope
+        if 0.7 <= ratio <= 1.3:
+            self.confirmed = True
+            self.step_limit_a = min(2.0 * self.step_limit_a, self.step_limit_max_a)
+        else:
+            self.step_limit_a = MAGNET_FIELD_SET_MAX_STEP_A
+
+    def _probe(self, current: float, field: float, scatter: float) -> float:
+        """The next probe step: up, or down when up is beyond the maximum."""
+        if self.probes >= len(MAGNET_FIELD_SET_PROBES_A):
+            floor = max(MAGNET_FIELD_SET_MIN_RESPONSE_G, 5.0 * max(scatter, self.anchor[2]))
+            raise MagnetFieldError(
+                f"The gaussmeter field did not change measurably with the {self.supply} current: "
+                f"{field - self.anchor[1]:+.3g} G for {current - self.anchor[0]:+.3f} A (it reads {field:+.6g} G at "
+                f"{current:+g} A; a change under {floor:.3g} G does not count). Check the gaussmeter probe's "
+                "position and range, the magnet's wiring and the supply's front panel")
+        size = MAGNET_FIELD_SET_PROBES_A[self.probes]
+        self.probes += 1
+        target = current + size
+        if target > self.max_current_a:
+            target = current - size
+        if target < -self.max_current_a:
+            raise MagnetFieldError(f"The {self.supply}'s ±{self.max_current_a:g} A leaves no room for a "
+                                   f"{size:g} A probe step from {current:+g} A")
+        return round(target, 3)
+
+    def _correct(self, current: float, field: float, error: float) -> float:
+        """One PID step, in A: within the step limit and the supply's maximum."""
+        previous = self.errors[-2] if len(self.errors) >= 2 else error
+        before = self.errors[-3] if len(self.errors) >= 3 else previous
+        action_g = self.kp * (error - previous) + self.ki * error + self.kd * (error - 2.0 * previous + before)
+        slope = self.slope_g_per_a
+        whole = error / slope
+        if self.confirmed and abs(current + whole) > 1.25 * self.max_current_a:
+            # Refused here, not after ramping to the maximum: a magnet only
+            # needs more current than this straight-line estimate.
+            raise MagnetFieldError(
+                f"Target {self.target_g:+g} G needs about {current + whole:+.3g} A at the measured "
+                f"{slope:.4g} G/A, more than the {self.supply}'s ±{self.max_current_a:g} A; the field at "
+                f"{current:+g} A is {field:+.6g} G")
+        delta = max(-self.step_limit_a, min(self.step_limit_a, action_g / slope))
+        resolution = MAGNET_FIELD_SET_RESOLUTION_A
+        if abs(delta) < resolution:
+            if abs(whole) < resolution:
+                raise MagnetFieldError(
+                    f"±{self.tolerance_g:g} G is finer than one setpoint step of the {self.supply}: 1 mA changes "
+                    f"the field by about {abs(slope) * resolution:.3g} G. The field at {current:+g} A is "
+                    f"{field:+.6g} G; use a larger tolerance")
+            delta = math.copysign(resolution, whole)
+        target = round(max(-self.max_current_a, min(self.max_current_a, current + delta)), 3)
+        if abs(target - current) < 0.5 * resolution:
+            raise MagnetFieldError(
+                f"Target {self.target_g:+g} G needs more than the {self.supply}'s ±{self.max_current_a:g} A; "
+                f"the field at {current:+g} A is {field:+.6g} G")
+        return target
+
+
+def magnet_field_stop_checks(stop_event, closing=None):
+    """(check, wait) for a field setting: check() raises MagnetFieldStopped
+    once ``stop_event`` is set or ``closing()`` is true (the page or the
+    program closing); wait(seconds) is a wait that ends at once on the stop
+    and checks before and after."""
+    def check() -> None:
+        if stop_event.is_set() or (closing is not None and closing()):
+            raise MagnetFieldStopped("the field setting was stopped")
+
+    def wait(seconds: float) -> None:
+        check()
+        stop_event.wait(seconds)
+        check()
+
+    return check, wait
+
+
+def read_settled_magnet_field(read_field_g, wait, tolerance_g) -> tuple[float, float]:
+    """The settled field after a step, on a worker: (G, scatter in G).
+
+    After MAGNET_FIELD_SET_SETTLE_S, groups of MAGNET_FIELD_SET_READINGS
+    readings are taken until two in a row agree: the spread of each and the
+    change of their means within the tolerance (or 0.2 % of the field, if
+    more).  The mean of the last group is the field; the scatter is the
+    largest of the two spreads and the change.  A field still moving, or
+    readings noisier than the tolerance, after
+    MAGNET_FIELD_SET_SETTLE_TIMEOUT_S raise MagnetFieldError: such a
+    reading is never the field (review, 2026-11-14).  ``wait(seconds)``
+    raises the page's stop."""
+    group_s = (MAGNET_FIELD_SET_READINGS - 1) * MAGNET_FIELD_SET_READ_INTERVAL_S + MAGNET_FIELD_SET_GROUP_GAP_S
+    groups = max(2, math.ceil(MAGNET_FIELD_SET_SETTLE_TIMEOUT_S / group_s))
+    wait(MAGNET_FIELD_SET_SETTLE_S)
+    before, change = None, math.nan
+    for group in range(groups):
+        if group:
+            wait(MAGNET_FIELD_SET_GROUP_GAP_S)
+        values = []
+        for index in range(MAGNET_FIELD_SET_READINGS):
+            if index:
+                wait(MAGNET_FIELD_SET_READ_INTERVAL_S)
+            values.append(float(read_field_g()))
+        if not all(math.isfinite(value) for value in values):
+            raise MagnetFieldError(f"The gaussmeter reading is not a number ({values!r})")
+        mean, spread = sum(values) / len(values), max(values) - min(values)
+        allowed = max(float(tolerance_g), MAGNET_FIELD_SET_SETTLE_REL_TOLERANCE * abs(mean))
+        if before is not None:
+            change = abs(mean - before[0])
+            scatter = max(spread, before[1], change)
+            if scatter <= allowed:
+                return mean, scatter
+        before = (mean, spread)
+    readings = ", ".join(f"{value:+.6g}" for value in values)
+    raise MagnetFieldError(
+        f"The gaussmeter field did not settle within {MAGNET_FIELD_SET_SETTLE_TIMEOUT_S:g} s: the last readings are "
+        f"{readings} G (a spread of {spread:.3g} G, and {change:.3g} G from the readings before them). It is still "
+        f"changing, or noisier than the ±{float(tolerance_g):g} G tolerance: a larger tolerance, or less filtering "
+        "or a steadier range on the gaussmeter, may be needed")
+
+
+def magnet_field_reading(pid: MagnetFieldPID, current: float, field: float, scatter: float, target) -> dict:
+    """One step of a field setting, for the page's progress and its end."""
+    return dict(current_a=current, field_g=field, scatter_g=scatter, target_g=pid.target_g,
+                tolerance_g=pid.tolerance_g, step=pid.steps, g_per_a=pid.slope_g_per_a,
+                reached=target is None, next_current_a=target)
+
+
+def set_magnet_field(pid: MagnetFieldPID, start_current_a: float, set_current, read_field_g, wait,
+                     progress=None) -> dict[str, object]:
+    """Bring the gaussmeter to ``pid``'s target, on a page's worker (user,
+    2026-11-14).  From ``start_current_a``, the current the supply is at:
+    read the settled field (read_settled_magnet_field), ask ``pid`` for the
+    next current, ``set_current(amps)`` it, and so on.
+
+    The page supplies the three calls.  ``wait(seconds)`` and
+    ``set_current`` raise the page's stop (a Zero / OFF, the page closing)
+    and that ends it; ``read_field_g()`` returns G.  ``progress(reading)``
+    after every reading.  Returns the last reading once the field is within
+    the tolerance; a MagnetFieldError leaves the current where it is."""
+    current = float(start_current_a)
+    while True:
+        field, scatter = read_settled_magnet_field(read_field_g, wait, pid.tolerance_g)
+        target = pid.update(current, field, scatter)
+        reading = magnet_field_reading(pid, current, field, scatter, target)
+        if progress is not None:
+            progress(dict(reading))
+        if target is None:
+            return reading
+        set_current(target)
+        current = target
+
+
+def run_magnet_field_set(supply: MagnetSupply, gauss, target_g, tolerance_g, voltage_limit_v, stop_event,
+                         closing=None, progress=None) -> dict[str, object]:
+    """A page's "Set field" on its worker (user, 2026-11-14): from the
+    current the chosen supply is at, set_magnet_field against the LS475.
+    (The FMR page's 4886 is stepped from the Tk thread instead, its
+    session's rule: set_stfmr_field.)
+
+    The KEPCO 4886: an output this program has on in current mode is taken
+    from where it is; one that is off is switched on at 0 A with
+    ``voltage_limit_v`` (the fixed-field sweep's baseline); one on in
+    voltage mode is refused.  Each of its writes is made under its lock
+    after the stop is checked there, so a Zero / OFF, which sets
+    ``stop_event`` first and then takes that lock, is never followed by a
+    write of this loop.  The Lake Shore: from its setpoint, which it must
+    be at (a supply stopped mid-ramp is refused: its first step would ramp
+    across the whole difference); each step a ramp at the supply's rate,
+    which a Stop ends with STOP.
+
+    ``closing()`` true (the page or the program closing) ends it as a Stop.
+    Raises MagnetFieldStopped or MagnetFieldError; the current stays where
+    the last step left it, for the operator's Zero / OFF."""
+    pid = MagnetFieldPID(target_g, tolerance_g, supply.max_current_a(), supply=supply.label)
+    check, wait = magnet_field_stop_checks(stop_event, closing)
+
+    def read_field_g() -> float:
+        return float(STFMRGauss475Controller.value_in_gauss(gauss.read_field()))
+
+    def set_current(value: float) -> None:
+        if supply.lakeshore:
+            check()
+            supply.step(value)
+            return
+        with supply.kepco.lock:
+            check()
+            supply.step(value)
+
+    try:
+        if supply.lakeshore:
+            check()
+            state = supply.lakeshore_controller.read_state()
+            start = float(state["setpoint_a"])
+            if not math.isfinite(start):
+                raise MagnetFieldError(f"The {supply.label}'s setpoint (SETI?) is not a number; nothing was sent")
+            if not state.get("at_setpoint", False):
+                raise MagnetFieldError(
+                    f"The {supply.label} is not at its setpoint (SETI? {start:+.3f} A, output "
+                    f"{float(state['current_a']):+.3f} A): Apply output or Zero / OFF it first, then set the "
+                    "field; nothing was sent")
+        else:
+            kepco = supply.kepco
+            with kepco.lock:
+                check()
+                if not kepco.output_owned:
+                    supply.start(0.0, voltage_limit_v)
+                elif kepco.active_mode != "CURR":
+                    raise MagnetFieldError("The KEPCO 4886 output is on in voltage mode: Zero / OFF it first, then "
+                                           "set the field; nothing was sent")
+                start = float(kepco.cached_current_a)
+        return set_magnet_field(pid, start, set_current, read_field_g, wait, progress)
+    except LakeShoreRampStopped as stopped:
+        raise MagnetFieldStopped(str(stopped)) from stopped
+
+
+class _AnyEvent:
+    """A stop event that is set when any of several is: is_set(), and a
+    wait() on the first that ends at once when it is set."""
+
+    def __init__(self, *events) -> None:
+        self.events = events
+
+    def is_set(self) -> bool:
+        return any(event.is_set() for event in self.events)
+
+    def wait(self, timeout=None) -> bool:
+        if self.is_set():
+            return True
+        self.events[0].wait(timeout)
+        return self.is_set()
+
+
+def magnet_field_reading_text(reading: dict) -> str:
+    """One reading of a field setting, for a status line."""
+    return f"I {float(reading['current_a']):+.4g} A, B {float(reading['field_g']):+.6g} G"
 
 
 class STFMRGauss475Controller(SafeVisaIdentityController):
@@ -18831,6 +19246,11 @@ class CombinedControlApp:
         self.stfmr_output_mode_var = tk.StringVar(value="Current")
         self.stfmr_output_target_var = tk.StringVar(value="0")
         self.stfmr_output_limit_var = tk.StringVar(value="5")
+        # The field setting (user, 2026-11-14): the target and its tolerance
+        # in G, and the event its Zero / OFF sets.
+        self.stfmr_field_target_var = tk.StringVar(value="0")
+        self.stfmr_field_tolerance_var = tk.StringVar(value=f"{MAGNET_FIELD_SET_DEFAULT_TOLERANCE_G:g}")
+        self.stfmr_field_stop_event = threading.Event()
         self.stfmr_output_target_label_var = tk.StringVar(value="Target current A:")
         self.stfmr_output_limit_label_var = tk.StringVar(value="Voltage limit V:")
         self.stfmr_kepco_mode_var = tk.StringVar(value="Mode: --")
@@ -18962,6 +19382,15 @@ class CombinedControlApp:
         self.stfmr_lockin_manual_mode_var = tk.StringVar(value="Current")
         self.stfmr_lockin_manual_target_var = tk.StringVar(value="0")
         self.stfmr_lockin_manual_limit_var = tk.StringVar(value="5")
+        # The field setting (user, 2026-11-14): the target and its tolerance
+        # in G; True while one runs (the supply's and the LS475's rows wait).
+        self.stfmr_lockin_field_target_var = tk.StringVar(value="0")
+        self.stfmr_lockin_field_tolerance_var = tk.StringVar(value=f"{MAGNET_FIELD_SET_DEFAULT_TOLERANCE_G:g}")
+        self.stfmr_lockin_field_setting = False
+        # Set by Zero / OFF and the page's close, cleared only by the next
+        # Set field: the sweep's stop event, which ends it too, is also
+        # cleared by a Start and a Move stage (review, 2026-11-14).
+        self.stfmr_lockin_field_stop_event = threading.Event()
         self.stfmr_lockin_manual_target_label_var = tk.StringVar(value="Target current A:")
         self.stfmr_lockin_manual_limit_label_var = tk.StringVar(value="Voltage limit V:")
         self.stfmr_lockin_kepco_mode_var = tk.StringVar(value="Mode: --")
@@ -20850,7 +21279,7 @@ class CombinedControlApp:
         # Right of the connections and as tall as them; spare width stays here.
         output.grid(row=0, column=1, sticky="nsew")
         output.columnconfigure(11, weight=1)
-        for panel_row in range(3):
+        for panel_row in range(4):
             output.rowconfigure(panel_row, weight=1)
         ttk.Checkbutton(
             output,
@@ -20928,6 +21357,17 @@ class CombinedControlApp:
             ttk.Label(output, textvariable=variable, anchor="w").grid(
                 row=2, column=column, columnspan=2, sticky="ew", padx=padx, pady=(7, 0)
             )
+        # The field setting (user, 2026-11-14): the chosen supply's current
+        # is stepped until the LS475 reads the target (set_stfmr_field).
+        field_row = ttk.Frame(output)
+        field_row.grid(row=3, column=0, columnspan=12, sticky="w", pady=(7, 0))
+        ttk.Label(field_row, text="Target field G:").grid(row=0, column=0, sticky="e")
+        ttk.Entry(field_row, textvariable=self.stfmr_field_target_var, width=8).grid(row=0, column=1, padx=(0, 8))
+        ttk.Label(field_row, text="Tol. G:").grid(row=0, column=2, sticky="e")
+        ttk.Entry(field_row, textvariable=self.stfmr_field_tolerance_var, width=5).grid(row=0, column=3, padx=(0, 8))
+        self.stfmr_set_field_button = ttk.Button(
+            field_row, text="Set field", command=self.set_stfmr_field, state="disabled")
+        self.stfmr_set_field_button.grid(row=0, column=4, padx=2)
         instruments = ttk.LabelFrame(
             top, text="FMR instrument connections", padding=self._ui_px(6, 4)
         )
@@ -21320,14 +21760,35 @@ class CombinedControlApp:
         # height between its three rows rather than leaving a gap below them.
         for panel_row in range(3):
             field_output.rowconfigure(panel_row, weight=1)
+        # The safety tick, and the field setting to its right (user,
+        # 2026-11-14): a row of its own cost the plots 13 px each in the
+        # 1101 px window, under their 55 px minimum (CI, Windows).  The
+        # tick's two lines leave this room, within the width of the row of
+        # controls below, so the panel is no taller and no wider.
+        tick_row = ttk.Frame(field_output)
+        tick_row.grid(row=0, column=0, columnspan=13, sticky="ew", pady=(0, 4))
+        tick_row.columnconfigure(1, weight=1)
         ttk.Checkbutton(
-            field_output,
+            tick_row,
             text=(
                 "Electromagnet polarity, cooling, wiring, front-panel limits, microwave power and\n"
                 "personnel safety confirmed, and no other program controls this KEPCO"
             ),
             variable=self.stfmr_lockin_manual_safety_var,
-        ).grid(row=0, column=0, columnspan=13, sticky="w", pady=(0, 4))
+        ).grid(row=0, column=0, sticky="w")
+        # The chosen supply's current is stepped until the LS475 reads the
+        # target (set_stfmr_lockin_field); the labels are short, as SHV's.
+        field_row = ttk.Frame(tick_row)
+        field_row.grid(row=0, column=1, sticky="e", padx=(12, 0))
+        ttk.Label(field_row, text="Field G").grid(row=0, column=0)
+        ttk.Entry(field_row, textvariable=self.stfmr_lockin_field_target_var, width=7).grid(
+            row=0, column=1, padx=3)
+        ttk.Label(field_row, text="±").grid(row=0, column=2)
+        ttk.Entry(field_row, textvariable=self.stfmr_lockin_field_tolerance_var, width=4).grid(
+            row=0, column=3, padx=3)
+        self.stfmr_lockin_set_field_button = ttk.Button(
+            field_row, text="Set field", width=8, command=self.set_stfmr_lockin_field, state="disabled")
+        self.stfmr_lockin_set_field_button.grid(row=0, column=4, padx=(3, 0))
         ttk.Label(field_output, text="Output mode:").grid(row=1, column=0, sticky="e")
         manual_mode = ttk.Combobox(
             field_output,
@@ -22319,7 +22780,10 @@ class CombinedControlApp:
                 continue
             connected = status == "Connected"
             # The LS643 row also waits for its panel jobs (user, 2026-10-21).
-            row_locked = rows_locked or (key == "lakeshore" and self._stfmr_lockin_magnet_jobs_pending())
+            # And the supply's and the LS475's while a field setting steps
+            # the one against the other (user, 2026-11-14).
+            row_locked = (rows_locked or (key == "lakeshore" and self._stfmr_lockin_magnet_jobs_pending())
+                          or (key in ("kepco", "gauss") and self.__dict__.get("stfmr_lockin_field_setting", False)))
             connect_button.configure(
                 state="disabled" if connected or row_locked else "normal"
             )
@@ -22389,9 +22853,14 @@ class CombinedControlApp:
         button = self.__dict__.get("stfmr_lockin_apply_output_button")
         if button is None:
             return
-        button.configure(state="normal" if self._stfmr_lockin_connected(self._stfmr_lockin_magnet_key())
-                         and not self.stfmr_lockin_running and not self._stfmr_lockin_manual_output_held()
-                         and not self._stfmr_lockin_magnet_jobs_pending() else "disabled")
+        free = (self._stfmr_lockin_connected(self._stfmr_lockin_magnet_key())
+                and not self.stfmr_lockin_running and not self._stfmr_lockin_manual_output_held()
+                and not self._stfmr_lockin_magnet_jobs_pending())
+        button.configure(state="normal" if free else "disabled")
+        # Set field: the same, and the LS475 it is set against (user, 2026-11-14).
+        set_field = self.__dict__.get("stfmr_lockin_set_field_button")
+        if set_field is not None:
+            set_field.configure(state="normal" if free and self._stfmr_lockin_connected("gauss") else "disabled")
 
     def _stfmr_lockin_manual_output_held(self) -> bool:
         """Apply output waits while a stage job of the Motor row (Connect,
@@ -22459,8 +22928,8 @@ class CombinedControlApp:
         if self._stfmr_lockin_lakeshore_chosen():
             self._apply_stfmr_lockin_lakeshore_output()
             return
-        if not controller.connected:
-            return
+        if not controller.connected or self._stfmr_lockin_magnet_jobs_pending():
+            return      # also while a field setting steps the 4886 (user, 2026-11-14)
         if not self.stfmr_lockin_manual_safety_var.get():
             messagebox.showwarning(
                 "STFMR KEPCO",
@@ -22524,6 +22993,136 @@ class CombinedControlApp:
             lambda _reading: self.stfmr_lockin_status_var.set(f"LS643 at {target:+g} A; check the LS475"),
             f"Ramping the LS643 to {target:+g} A at {rate:g} A/s…")
 
+    def set_stfmr_lockin_field(self) -> None:
+        """Set field (user, 2026-11-14), as the FMR page's: the chosen
+        supply's current is stepped on the page's worker until the LS475
+        reads the target within the tolerance (run_magnet_field_set), then
+        left there.  It waits as Apply output does (a sweep, a start, a stage
+        job, a Lake Shore job) and needs the safety tick and both
+        instruments connected.  While it runs the page's magnet job count is
+        up, so Apply output, Start, a hand move and the supply choice wait,
+        and the supply's and the LS475's rows are locked.  Zero / OFF ends
+        it (the sweep's stop event) and zeroes the supply."""
+        if self.closing or self.stfmr_lockin_closed:
+            return
+        if self.stfmr_lockin_running:
+            messagebox.showwarning(
+                "STFMR field", "A sweep is running and owns the magnet supply. Stop the sweep first.",
+                parent=self.root)
+            return
+        if self._stfmr_lockin_manual_output_held():
+            messagebox.showwarning(
+                "STFMR field",
+                "A stage job or a sweep start is pending: the magnet supply stays as it is until it ends.",
+                parent=self.root)
+            return
+        if self._stfmr_lockin_magnet_jobs_pending():
+            return
+        name = self._stfmr_lockin_supply_label()
+        if (not self._stfmr_lockin_connected(self._stfmr_lockin_magnet_key())
+                or not self._stfmr_lockin_connected("gauss")):
+            messagebox.showwarning("STFMR field", f"Connect the {name} and the LS475 first.", parent=self.root)
+            return
+        if not self.stfmr_lockin_manual_safety_var.get():
+            messagebox.showwarning(
+                "STFMR field",
+                "Please tick the magnet, cooling, wiring, limits and personnel safety confirmation first.",
+                parent=self.root)
+            return
+        try:
+            limit = None
+            if self._stfmr_lockin_lakeshore_chosen():
+                self._stfmr_lockin_rate()
+            else:
+                if self.stfmr_lockin_manual_mode_var.get() != "Current":
+                    raise ValueError("Choose the output mode Current to set a field: the 4886 is stepped in current")
+                try:
+                    limit = float(self.stfmr_lockin_manual_limit_var.get())
+                except (TypeError, ValueError) as error:
+                    raise ValueError("The voltage limit must be a number") from error
+                if not 0.0 < limit <= STFMR_KEPCO_MAX_VOLTAGE_V:
+                    raise ValueError("The voltage limit must be within 0–20 V")
+            supply = self._stfmr_lockin_supply()
+            target, tolerance = self._field_setting_inputs(
+                self.stfmr_lockin_field_target_var.get(), self.stfmr_lockin_field_tolerance_var.get(), supply)
+        except (TypeError, ValueError, tk.TclError) as error:
+            messagebox.showerror("STFMR field", str(error), parent=self.root)
+            return
+        gauss = self.stfmr_lockin_controllers["gauss"]
+        # An old Zero / OFF must not end this one (no sweep runs or starts).
+        # It ends on its own event or the sweep's, whichever is set: a Move
+        # stage that clears the sweep's cannot undo a Zero / OFF pressed
+        # while this is still queued (review, 2026-11-14).
+        self.stfmr_lockin_stop_event.clear()
+        self.stfmr_lockin_field_stop_event.clear()
+        stop_event = _AnyEvent(self.stfmr_lockin_field_stop_event, self.stfmr_lockin_stop_event)
+        supply.stop_event = stop_event
+        if supply.lakeshore:
+            supply.lakeshore_controller.clear_stop_request()
+        self.thread_log(f"STFMR field: setting {target:+g} G ± {tolerance:g} G with the {name}")
+        self.stfmr_lockin_field_setting = True
+        self.stfmr_lockin_magnet_job_pending = self.__dict__.get("stfmr_lockin_magnet_job_pending", 0) + 1
+        self.stfmr_lockin_status_var.set(f"Setting the field to {target:+g} G…")
+        self._update_stfmr_lockin_ui()
+
+        def progress(reading) -> None:
+            def show() -> None:
+                # Not after a Zero / OFF: its line stays (a reading posted
+                # before the press can run after it).
+                if self.closing or self.stfmr_lockin_closed or stop_event.is_set():
+                    return
+                self.stfmr_lockin_field_var.set(f"B: {float(reading['field_g']):+.7g} G")
+                # Within the 52-character status label.
+                self.stfmr_lockin_status_var.set(
+                    f"Field step {reading['step']}: {magnet_field_reading_text(reading)}")
+                self._show_stfmr_lockin_kepco_state()
+            self.post_ui(show)
+
+        def job():
+            self._stfmr_lockin_require_page_open()
+            return run_magnet_field_set(
+                supply, gauss, target, tolerance, limit, stop_event,
+                closing=self._stfmr_lockin_page_closing, progress=progress)
+
+        def ended() -> None:
+            self.stfmr_lockin_field_setting = False
+            self.stfmr_lockin_magnet_job_pending = max(0, self.stfmr_lockin_magnet_job_pending - 1)
+        try:
+            future = self.stfmr_lockin_executor.submit(job)
+        except BaseException as error:
+            ended()
+            self._update_stfmr_lockin_ui()
+            if not self.closing:
+                messagebox.showerror("STFMR field", str(error), parent=self.root)
+            return
+
+        def finished() -> None:
+            ended()
+            if self.closing or self.stfmr_lockin_closed:
+                return
+            try:
+                reading = future.result()
+            except MagnetFieldStopped:
+                # A Zero / OFF's own line stays once it has zeroed the supply.
+                if supply.output_on:
+                    self.stfmr_lockin_status_var.set(f"Field setting stopped; {name} left where it was")
+            except BaseException as error:
+                self.stfmr_lockin_status_var.set(f"Field not set: {short_status_error(error, 36)}")
+                message = (f"{error}\n\nThe {name} is left at its last current; Zero / OFF zeroes it."
+                           if supply.output_on else str(error))
+                self.thread_log(f"STFMR field: {target:+g} G not set: {error}")
+                self._stfmr_lockin_after_drain(lambda: messagebox.showerror("STFMR field", message,
+                                                                            parent=self.root))
+            else:
+                text = magnet_field_reading_text(reading)
+                self.stfmr_lockin_status_var.set(f"Field set: {text}")
+                self.thread_log(f"STFMR field: {target:+g} G ± {tolerance:g} G set with the {name}: {text}, "
+                                f"{reading['step']} steps, {float(reading['g_per_a'] or 0.0):.4g} G/A")
+            self._update_stfmr_lockin_ui()
+            self._show_stfmr_lockin_kepco_state()
+
+        future.add_done_callback(lambda _future: self.post_ui(finished))
+
     def read_stfmr_lockin_kepco_once(self) -> None:
         if self._stfmr_lockin_lakeshore_chosen():
             # Read back from the LS643 on the worker (user, 2026-10-21).
@@ -22543,6 +23142,11 @@ class CombinedControlApp:
     def zero_stfmr_lockin_kepco_output(self, *, deferred: bool = False) -> None:
         if self.closing:
             return
+        # A field setting ends first (user, 2026-11-14); looked up, so that
+        # nothing about it can keep the red button from zeroing.
+        field_stop = self.__dict__.get("stfmr_lockin_field_stop_event")
+        if field_stop is not None:
+            field_stop.set()
         if self._stfmr_lockin_lakeshore_chosen():
             self._zero_stfmr_lockin_lakeshore()
             return
@@ -22580,7 +23184,13 @@ class CombinedControlApp:
                 "Zero / OFF requested: the KEPCO is finishing a transfer and "
                 "will be zeroed when it returns"
             )
-            self.root.after(200, lambda: self.zero_stfmr_lockin_kepco_output(deferred=True))
+            # deferred only behind a sweep, whose own end zeroes the 4886.
+            # Behind anything else that holds it (a field setting's write),
+            # the press is made again in full and zeroes it itself: a
+            # deferred one found no sweep, sent nothing, and the press was
+            # lost (review, 2026-11-14).
+            behind_sweep = bool(self.stfmr_lockin_running)
+            self.root.after(200, lambda: self.zero_stfmr_lockin_kepco_output(deferred=behind_sweep))
             return
         try:
             self.stfmr_lockin_status_var.set("Zeroing and turning the KEPCO output off…")
@@ -22640,6 +23250,8 @@ class CombinedControlApp:
             return
         resource = self.stfmr_lockin_resource_vars[key].get().strip()
         if key == "lakeshore" and self._stfmr_lockin_magnet_jobs_pending():
+            return
+        if key in ("kepco", "gauss") and self.__dict__.get("stfmr_lockin_field_setting", False):
             return
         entry, connect_button, _disconnect = self._stfmr_lockin_row(key)
         connect_button.configure(state="disabled")
@@ -22707,6 +23319,8 @@ class CombinedControlApp:
             return
         if key == "lakeshore" and self._stfmr_lockin_magnet_jobs_pending():
             return      # it ramps to 0 A at its Disconnect: not under a job of its own
+        if key in ("kepco", "gauss") and self.__dict__.get("stfmr_lockin_field_setting", False):
+            return      # a field setting is stepping the one against the other (user, 2026-11-14)
         self._stfmr_lockin_row(key)[2].configure(state="disabled")
         if key == "kepco":
             try:
@@ -22939,6 +23553,11 @@ class CombinedControlApp:
             self._stfmr_lockin_require_other_4886_off()
             return
         kepco = self.stfmr_lockin_controllers["kepco"]
+        if pending and self._stfmr_lockin_magnet_jobs_pending():
+            # A field setting, queued or running, switches the 4886 on
+            # (review, 2026-11-14: the move's guards did not count it).
+            raise RuntimeError("A field setting of the 4886 is in progress: wait for it, zero the 4886 "
+                               "(Zero / OFF), then move the stage")
         if not getattr(kepco, "connected", False):
             raise RuntimeError("Connect the 4886 on this page and zero it (Zero / OFF) first: the stage must not "
                                "turn with the magnet on")
@@ -27485,6 +28104,12 @@ class CombinedControlApp:
             if magnet.connected
             else "disabled"
         )
+        set_field = self.__dict__.get("stfmr_set_field_button")
+        if set_field is not None:
+            # The supply and the LS475 it is set against (user, 2026-11-14).
+            set_field.configure(
+                state="disabled" if busy or not magnet.connected or not self.stfmr_controllers["gauss"].connected
+                else "normal")
         choice = self.__dict__.get("stfmr_magnet_choice_combo")
         if choice is not None:
             # Locked while a scan runs or ends, a Lake Shore job is pending,
@@ -29159,6 +29784,8 @@ class CombinedControlApp:
         if self._stfmr_lakeshore_chosen():
             self._apply_stfmr_lakeshore_output()
             return
+        if self._stfmr_magnet_jobs_pending():
+            return      # a field setting is stepping the 4886 (user, 2026-11-14)
         if not self.stfmr_safety_var.get():
             messagebox.showwarning(
                 "STFMR KEPCO",
@@ -29255,6 +29882,13 @@ class CombinedControlApp:
         self.stfmr_status_var.set("Showing the last values sent by this program, not a 4886 hardware readback")
 
     def zero_stfmr_kepco_output(self) -> None:
+        # A field setting ends first (user, 2026-11-14): its loop checks
+        # this before every write, under the 4886's lock, so none follows
+        # the zero below; the LS648's ramp sees the request as well.  Looked
+        # up, so that nothing about it can keep the red button from zeroing.
+        field_stop = self.__dict__.get("stfmr_field_stop_event")
+        if field_stop is not None:
+            field_stop.set()
         if self._stfmr_lakeshore_chosen():
             # The LS648 (user, 2026-10-21): no remote output-off, 0 A is off.
             # A ramp in progress sees the request at once and sends STOP; a
@@ -29292,6 +29926,189 @@ class CombinedControlApp:
             return
         self._apply_stfmr_kepco_readback(result)
         self.stfmr_status_var.set("KEPCO zeroed and output off")
+
+    @staticmethod
+    def _field_setting_inputs(target_text, tolerance_text, supply: MagnetSupply) -> tuple[float, float]:
+        """A page's Target field and Tol. boxes as G, checked as the
+        controller checks them; ValueError says what is wrong."""
+        try:
+            target, tolerance = float(target_text), float(tolerance_text)
+        except (TypeError, ValueError) as error:
+            raise ValueError("The target field and its tolerance must be numbers, in G") from error
+        MagnetFieldPID(target, tolerance, supply.max_current_a(), supply=supply.label)
+        return target, tolerance
+
+    def _show_stfmr_field_supply_state(self) -> None:
+        """The panel's readouts for the chosen supply (no I/O)."""
+        if self._stfmr_lakeshore_chosen():
+            self._show_stfmr_lakeshore_state()
+            return
+        controller = self.stfmr_controllers["kepco"]
+        if controller.connected and controller.last_command:
+            self._apply_stfmr_kepco_readback(controller._cached_state())
+
+    def set_stfmr_field(self) -> None:
+        """Set field (user, 2026-11-14: "Add a magnetic field setting ... You
+        can try to use PID"): the chosen supply's current is stepped until
+        the LS475 reads the target within the tolerance, then left there.
+        The LS648 is ramped on the FMR worker (run_magnet_field_set); the
+        4886 is written from the Tk thread, as always on this page, and only
+        the LS475 is read on the worker.  It needs the safety tick,
+        the supply and the LS475 connected and the page idle; the page is
+        busy meanwhile, as during an LS648 ramp.  Zero / OFF ends it and
+        zeroes the supply; a target that cannot be reached leaves the
+        current where the last step put it, and says so."""
+        if self.closing or self.stfmr_closed or self._stfmr_scans_busy() or self._stfmr_magnet_jobs_pending():
+            return
+        name = self._stfmr_supply_label()
+        gauss = self.stfmr_controllers["gauss"]
+        if not self.stfmr_controllers[self._stfmr_magnet_key()].connected or not gauss.connected:
+            messagebox.showwarning("FMR field", f"Connect the {name} and the LS475 first.", parent=self.root)
+            return
+        if not self.stfmr_safety_var.get():
+            messagebox.showwarning(
+                "FMR field",
+                "Please tick the magnet, cooling, wiring, limits and personnel safety confirmation first.",
+                parent=self.root,
+            )
+            return
+        try:
+            limit = None
+            if self._stfmr_lakeshore_chosen():
+                self._stfmr_rate()
+            else:
+                if self.stfmr_output_mode_var.get() != "Current":
+                    raise ValueError("Choose the output mode Current to set a field: the 4886 is stepped in current")
+                try:
+                    limit = float(self.stfmr_output_limit_var.get())
+                except (TypeError, ValueError) as error:
+                    raise ValueError("The voltage limit must be a number") from error
+                if not 0.0 < limit <= STFMR_KEPCO_MAX_VOLTAGE_V:
+                    raise ValueError("The voltage limit must be within 0–20 V")
+            supply = self._stfmr_supply(self.stfmr_field_stop_event)
+            target, tolerance = self._field_setting_inputs(
+                self.stfmr_field_target_var.get(), self.stfmr_field_tolerance_var.get(), supply)
+        except (TypeError, ValueError, tk.TclError) as error:
+            messagebox.showerror("FMR field", str(error), parent=self.root)
+            return
+        # An old Zero / OFF must not end this one.
+        self.stfmr_field_stop_event.clear()
+        if supply.lakeshore:
+            supply.lakeshore_controller.clear_stop_request()
+        self.thread_log(f"FMR field: setting {target:+g} G ± {tolerance:g} G with the {name}")
+        self.stfmr_magnet_job_pending = self.__dict__.get("stfmr_magnet_job_pending", 0) + 1
+        self.stfmr_status_var.set(f"Setting the field to {target:+g} G…")
+        self._set_stfmr_scan_busy(self._stfmr_scans_busy())
+        stop_event = self.stfmr_field_stop_event
+
+        def closing() -> bool:
+            return bool(self.closing or self.stfmr_closed)
+
+        def show(reading) -> None:
+            """A reading on the Tk thread.  Not after a Zero / OFF: its line
+            stays (a reading posted before the press can run after it)."""
+            if closing() or stop_event.is_set():
+                return
+            self.stfmr_gauss_field_var.set(f"{float(reading['field_g']):+.8g} G")
+            self.stfmr_status_var.set(
+                f"Setting {target:+g} G: step {reading['step']}, {magnet_field_reading_text(reading)}")
+            self._show_stfmr_field_supply_state()
+
+        def finish(reading=None, error=None) -> None:
+            """Its end, on the Tk thread, once."""
+            self.stfmr_magnet_job_pending = max(0, self.stfmr_magnet_job_pending - 1)
+            if closing():
+                return
+            if isinstance(error, MagnetFieldStopped):
+                # A Zero / OFF's own line stays once it has zeroed the supply.
+                if supply.output_on:
+                    self.stfmr_status_var.set(f"Field setting stopped; the {name} is left where it was")
+            elif error is not None:
+                self.stfmr_status_var.set(f"Field not set: {short_status_error(error, 60)}")
+                message = (f"{error}\n\nThe {name} is left at its last current; Zero / OFF zeroes it."
+                           if supply.output_on else str(error))
+                self.thread_log(f"FMR field: {target:+g} G not set: {error}")
+                self._stfmr_fmr_after_drain(lambda: messagebox.showerror("FMR field", message, parent=self.root))
+            else:
+                text = magnet_field_reading_text(reading)
+                self.stfmr_status_var.set(f"Field set: {text} (target {target:+g} ± {tolerance:g} G)")
+                self.thread_log(f"FMR field: {target:+g} G set with the {name}: {text}, {reading['step']} steps, "
+                                f"{float(reading['g_per_a'] or 0.0):.4g} G/A")
+            self._show_stfmr_field_supply_state()
+            self._set_stfmr_scan_busy(self._stfmr_scans_busy())
+
+        def result_of(future) -> None:
+            try:
+                reading = future.result()
+            except BaseException as error:
+                finish(error=error)
+                return
+            finish(reading=reading)
+
+        if supply.lakeshore:
+            # The LS648: the whole loop on the worker, each step a ramp.
+            try:
+                future = self.stfmr_executor.submit(
+                    lambda: run_magnet_field_set(supply, gauss, target, tolerance, None, stop_event, closing=closing,
+                                                 progress=lambda reading: self.post_ui(lambda: show(reading))))
+            except BaseException as error:
+                finish(error=error)
+                return
+            future.add_done_callback(lambda _future: self.post_ui(lambda: result_of(future)))
+            return
+
+        # The 4886: every write from the Tk thread, this session's rule on
+        # the FMR page (a first transaction from a worker thread can leave
+        # address 6 unresponsive: connect_stfmr_device).  Only the LS475 is
+        # read on the worker.  Zero / OFF runs on the Tk thread too, so it
+        # can never fall between the stop's check and a write here.
+        kepco = self.stfmr_controllers["kepco"]
+        pid = MagnetFieldPID(target, tolerance, supply.max_current_a(), supply=supply.label)
+        check, wait = magnet_field_stop_checks(stop_event, closing)
+
+        def read_field_g() -> float:
+            return float(STFMRGauss475Controller.value_in_gauss(gauss.read_field()))
+
+        def read() -> None:
+            try:
+                future = self.stfmr_executor.submit(lambda: read_settled_magnet_field(read_field_g, wait, tolerance))
+            except BaseException as error:
+                finish(error=error)
+                return
+            future.add_done_callback(lambda _future: self.post_ui(lambda: decide(future)))
+
+        def decide(future) -> None:
+            try:
+                check()                                 # a Zero / OFF first
+                field, scatter = future.result()
+                current = float(kepco.cached_current_a)
+                following = pid.update(current, field, scatter)
+                reading = magnet_field_reading(pid, current, field, scatter, following)
+                show(reading)
+                if following is not None:
+                    self._apply_stfmr_kepco_readback(kepco.set_scan_current(following))
+            except BaseException as error:
+                finish(error=error)
+                return
+            if following is None:
+                finish(reading=reading)
+                return
+            read()
+
+        try:
+            check()
+            if not kepco.output_owned:
+                # Switched on at 0 A, the fixed-field sweep's baseline.
+                self._apply_stfmr_kepco_readback(kepco.set_output("CURR", 0.0, limit))
+            elif kepco.active_mode != "CURR":
+                raise MagnetFieldError("The KEPCO 4886 output is on in voltage mode: Zero / OFF it first, then set "
+                                       "the field; nothing was sent")
+        except BaseException as error:
+            if kepco.output_owned:
+                self._flag_stfmr_kepco_off_unconfirmed()
+            finish(error=error)
+            return
+        read()
 
     def read_stfmr_gauss_once(self) -> None:
         if (
@@ -50716,6 +51533,10 @@ class CombinedControlApp:
         self.stfmr_closed = True
         self.stfmr_fmr_stop_event.set()
         self.stfmr_frequency_stop_event.set()
+        # A field setting's ramp step in flight sends STOP at once (review, 2026-11-14).
+        field_stop = self.__dict__.get("stfmr_field_stop_event")
+        if field_stop is not None:
+            field_stop.set()
         if self.stfmr_fmr_after_id is not None:
             try:
                 self.root.after_cancel(self.stfmr_fmr_after_id)
@@ -50825,6 +51646,9 @@ class CombinedControlApp:
         sweep_running = bool(self.stfmr_lockin_running)
         self.stfmr_lockin_running = False
         self.stfmr_lockin_stop_event.set()
+        field_stop = self.__dict__.get("stfmr_lockin_field_stop_event")
+        if field_stop is not None:
+            field_stop.set()
         # A hand move of the stage watches this one too (and the sweep's);
         # it sends STOP itself (user, 2026-10-17).
         stage_stop = self.__dict__.get("stfmr_lockin_stage_stop_event")
@@ -51440,6 +52264,8 @@ class CombinedControlApp:
                 "ppms_field_scan_stop_event",
                 # RT-E's Newmark stage, turning by hand (user, 2026-10-13).
                 "rte_stage_stop_event",
+                # A field setting's step in flight (review, 2026-11-14).
+                "stfmr_field_stop_event", "stfmr_lockin_field_stop_event",
             ):
                 event = owner.__dict__.get(name)
                 if event is not None:
@@ -54989,6 +55815,25 @@ class RTEPanel(PPMSPanel):
             live.grid(row=row, column=6, padx=(10, 0), sticky='w')
             if laid_out:
                 live.configure(wraplength=32 * tkfont.nametofont('TkDefaultFont', root=live).measure('0'))
+        # The field setting (user, 2026-11-14), under the LS475's reading in
+        # the rack's free place beside the 6221's row, so the page keeps its
+        # height: the chosen supply's current is stepped until the LS475
+        # reads the target (_rte_set_field).
+        self.rte_field_target = tk.StringVar(value='0')
+        self.rte_field_tolerance = tk.StringVar(value=f'{MAGNET_FIELD_SET_DEFAULT_TOLERANCE_G:g}')
+        field_set = ttk.Frame(rack)
+        field_set.grid(row=2, column=6, padx=(10, 0), sticky='w')
+        ttk.Label(field_set, text='Field G').grid(row=0, column=0)
+        field_target = ttk.Entry(field_set, textvariable=self.rte_field_target, width=7)
+        field_target.grid(row=0, column=1, padx=3)
+        ttk.Label(field_set, text='±').grid(row=0, column=2)
+        field_tolerance = ttk.Entry(field_set, textvariable=self.rte_field_tolerance, width=4)
+        field_tolerance.grid(row=0, column=3, padx=3)
+        self.rte_set_field_button = ttk.Button(field_set, text='Set field', width=8, command=self._rte_set_field)
+        self.rte_set_field_button.grid(row=0, column=4, padx=(3, 0))
+        # Locked with the rack's other inputs while it is busy.
+        self.rte_field_set_widgets = [(field_target, 'normal'), (field_tolerance, 'normal'),
+                                      (self.rte_set_field_button, 'normal')]
 
         instruments = self.ppms_instruments_frame = ttk.Frame(measurement)
         instruments.grid(row=0, column=1, sticky='new')
@@ -55622,7 +56467,8 @@ class RTEPanel(PPMSPanel):
         # answer do not count it.
         busy = (self.ppms_environment_busy or self.ppms_field_scan_running or self.rte_closed
                 or self.__dict__.get('rte_stage_prompt_open', False))
-        for widget, state in self.rte_edit_widgets + self.ppms_lockin_choice_widgets:
+        for widget, state in (self.rte_edit_widgets + self.ppms_lockin_choice_widgets
+                              + self.__dict__.get('rte_field_set_widgets', [])):
             widget.configure(state='disabled' if busy else state)
         self._rte_paint_red_buttons()
         combo = self.__dict__.get('rte_magnet_choice_combo')
@@ -56342,6 +57188,81 @@ class RTEPanel(PPMSPanel):
             return
         self._rte_submit(lambda: self.rte_controllers['kepco'].set_output('CURR', target, limit),
                          lambda _: self.rte_drive_live.set(f'KEPCO programmed: {target:+g} A / limit {limit:g} V'))
+
+    def _rte_set_field(self):
+        """Set field (user, 2026-11-14), as the FMR and ST-FMR pages': the
+        chosen supply's current is stepped on the SHV worker until the LS475
+        reads the target within the tolerance (run_magnet_field_set), then
+        left there.  It needs what Apply needs (the rack's safety tick, the
+        rack idle) and both instruments connected; the rack is busy
+        meanwhile.  The Zero / OFF button, never locked, sets the scan's
+        stop event: this ends, and its zero, queued on the same worker, runs
+        next."""
+        try:
+            self._require_ppms_control_ready()
+            name = self._rte_supply_label()
+            limit = self._rte_voltage_limit()
+            if self._rte_lakeshore_chosen():
+                self._rte_rate()
+            supply = self._rte_supply()
+            # A Stop during a ramp ends it as on the other pages (not as a
+            # scan's PPMSScanCancelled).
+            supply.stopped = None
+            if not supply.connected:
+                raise RuntimeError(f'Connect the {name} first')
+            gauss = self.rte_controllers['gauss']
+            if not gauss.connected:
+                raise RuntimeError('Connect the Lake Shore 475 first')
+            target, tolerance = self._field_setting_inputs(
+                self.rte_field_target.get(), self.rte_field_tolerance.get(), supply)
+        except Exception as error:
+            messagebox.showerror('SHV field', str(error), parent=self.root)
+            return
+        # An old Zero / OFF must not end this one.
+        self.ppms_field_scan_stop_event.clear()
+        if supply.lakeshore:
+            supply.lakeshore_controller.clear_stop_request()
+        self.thread_log(f'SHV field: setting {target:+g} G ± {tolerance:g} G with the {name}')
+        self.rte_drive_live.set(f'Setting the field to {target:+g} G…')
+
+        def progress(reading):
+            def show():
+                # Not after a Zero / OFF: its line stays.
+                if self.rte_closed or self.closing or self.ppms_field_scan_stop_event.is_set():
+                    return
+                self.rte_field_live.set(f"LS475 field: {float(reading['field_g']):+.7g} G")
+                self.rte_drive_live.set(f"Field step {reading['step']}: {magnet_field_reading_text(reading)}")
+            self.post_ui(show)
+
+        def work():
+            # A stop and a failure are this job's own results, shown below
+            # (not _rte_submit's "SHV operation failed").
+            try:
+                return run_magnet_field_set(
+                    supply, gauss, target, tolerance, limit, self.ppms_field_scan_stop_event,
+                    closing=lambda: self.closing or self.rte_closed, progress=progress)
+            except Exception as error:
+                return error
+
+        def done(result):
+            if supply.lakeshore:
+                controller = supply.lakeshore_controller
+                self.rte_connections['lakeshore'].set(lakeshore_state_word(controller.reading, controller.arm_problem))
+            if isinstance(result, MagnetFieldStopped):
+                # A Zero / OFF's own line follows once it has zeroed the supply.
+                self.rte_drive_live.set(f'{name}: field setting stopped')
+                return
+            if isinstance(result, BaseException):
+                self.rte_drive_live.set(f'Field not set: {short_status_error(result, 60)}')
+                self.thread_log(f'SHV field: {target:+g} G not set: {result}')
+                self._rte_dialog('SHV field', f'{result}\n\nThe {name} is left at its last current; its Zero / OFF '
+                                              'zeroes it.' if supply.output_on else str(result))
+                return
+            text = magnet_field_reading_text(result)
+            self.rte_drive_live.set(f'Field set: {text}')
+            self.thread_log(f"SHV field: {target:+g} G ± {tolerance:g} G set with the {name}: {text}, "
+                            f"{result['step']} steps, {float(result['g_per_a'] or 0.0):.4g} G/A")
+        self._rte_submit(work, done)
 
     def _rte_zero(self):
         self.ppms_field_scan_stop_event.set()

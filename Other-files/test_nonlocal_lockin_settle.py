@@ -606,9 +606,12 @@ class GateVIReviewTests(NoWindows):
         self.assertEqual(raw[1]["auto_range_action"], "RANGE 0.01->0.1 V (overload/high)")
         summary = {(row["point_index"], row["meter_key"], row["harmonic"]): row
                    for row in tables["VI_summary.csv"]}
-        # The valid 9 V before the step is not in the mean (it was).
-        self.assertEqual(float(summary[("1", "mfli", "2")]["mean_voltage_V"]), 2e-4)
-        self.assertEqual(float(summary[("1", "8", "1")]["mean_voltage_V"]), 1e-3)
+        # The valid 9 V before the step is not in the mean (it was).  Not an
+        # exact comparison: how many readings fit in the 0.5 s depends on the
+        # computer, and the mean of that many equal values can be one bit off
+        # (0.00019999999999999998 on Windows, 2026-11-14).
+        self.assertAlmostEqual(float(summary[("1", "mfli", "2")]["mean_voltage_V"]), 2e-4, delta=1e-12)
+        self.assertAlmostEqual(float(summary[("1", "8", "1")]["mean_voltage_V"]), 1e-3, delta=1e-12)
 
     def test_a_meter_that_ranges_on_every_reading_does_not_stop_the_scan(self):
         a, _settings, tables, _log = self.run_scan(ZurichRangingAC(always=True), tc="2")

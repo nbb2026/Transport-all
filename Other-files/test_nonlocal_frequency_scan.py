@@ -373,10 +373,23 @@ class GateVITests(unittest.TestCase):
         # The 6221 pre-run: at least 5 periods (the page's pre-run is 0 s).
         # It counts from the switch-on and the lock check comes first, so
         # the wait after it is 5 periods less that (here instant) check
-        # (review, 2026-10-14).
-        waits = a.nonlocal_vi_stop_event.waits
-        for period_s in (5 / 11, 5 / 13):
-            self.assertEqual(sum(1 for w in waits if w and abs(w - period_s) < 0.01), 3)
+        # (review, 2026-10-14).  The time from the switch-on to the reading
+        # is checked, as the CSVs have it: the wait itself is shorter by
+        # what the computer took for the check, and a count of the waits
+        # within 10 ms of 5 periods failed on a slow Windows run (2026-11-14).
+        settles = {}
+        for row in a.nonlocal_vi_summary_rows:
+            settles.setdefault(row["set_frequency_hz"], set()).add(
+                (row["point_index"], row["settle_waited_s"]))
+        self.assertEqual(settles, {
+            11.0: {(1, 0.455), (2, 0.455), (3, 0.455)},
+            13.0: {(4, 0.385), (5, 0.385), (6, 0.385)},
+        })
+        self.assertEqual({row["settle_waited_s"] for row in summary}, {"0.455", "0.385"})
+        # One such wait per point, and none longer than the 5 periods.
+        pre_runs = [w for w in a.nonlocal_vi_stop_event.waits if w and w >= 0.05]
+        self.assertEqual(len(pre_runs), 6)
+        self.assertLessEqual(max(pre_runs), 5 / 11 + 1e-9)
         a.nonlocal_vi_progress.configure.assert_called_with(value=6)
 
     def test_without_the_tick_the_scan_is_as_before(self):

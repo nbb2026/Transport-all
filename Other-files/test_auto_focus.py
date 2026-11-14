@@ -734,6 +734,23 @@ class KeepInFocusTests(ManagerCase):
         self.assertTrue(a.ui.empty())
         self.assertEqual(m.controller.writes, [])
 
+    def test_a_check_that_fails_before_a_point_is_reported_not_lost(self):
+        """Its report runs later, on the Tk thread, after the except block
+        that caught the failure has ended: it named the caught error there
+        and raised NameError instead of reporting (found by a static check
+        of the whole program, 2026-11-14)."""
+        a, m, focus = self.page()
+        focus.keep_var.set(True)
+        focus.keep_changed()
+        focus._call_on_tk = mock.Mock(side_effect=RuntimeError("stage busy"))
+        failed = []
+        focus._fail = lambda message, attrs: failed.append((message, attrs))
+        focus.between_points("magnet_scan_recorder", threading.Event())
+        while not a.ui.empty():
+            a.ui.get()()                # the Tk thread, later
+        self.assertEqual(failed, [("Keep in focus stopped: stage busy", ("magnet_scan_recorder",))])
+        self.assertIsNone(focus.running_kind)
+
     def test_a_scan_start_stops_a_running_check_first(self):
         a, m, focus = self.page(focus_um=7259.0)
         focus.camera_ready = True

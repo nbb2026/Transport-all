@@ -3,10 +3,14 @@ field setting in FMR, SHV, STFMR modules. You can try to use PID to control
 the magnetic field value"), offline against simulated magnets.
 
 - MagnetFieldPID: G per A measured with a probe step, then a PID step per
-  settled reading; within the tolerance it stops.  It never steps further
-  than its limit, never beyond the supply's maximum, and gives up, the
-  current left where it is, when the gaussmeter does not answer, the field
-  does not follow, or the target cannot be reached.
+  settled reading; within the tolerance it needs no correction, and holds
+  the field there (user, the same day: "keep regulating the field after it
+  reaches the target").  It never steps further than its limit, never
+  beyond the supply's maximum, and gives up, the current left where it is,
+  when the target cannot be reached or, at once, when the field does not
+  answer a change of the current (user: "when the current increase while
+  the field not respond stop increasing the current and return that the
+  Gauss meter may not work").
 - read_settled_magnet_field: after a step, groups of three readings until two
   in a row agree; a field still moving, or noisier than the tolerance, is
   never taken for the field.
@@ -29,6 +33,8 @@ from test_ppms_motor_debug import app
 
 PID = app.MagnetFieldPID
 PROBES = app.MAGNET_FIELD_SET_PROBES_A
+# What a field that does not answer the current is reported as (user, 2026-11-14).
+RESPONSE = ("did not respond", "The gaussmeter may not be working")
 
 
 class Magnet:
@@ -56,6 +62,9 @@ class Magnet:
         return self.polarity * linear + self.remanence
 
     def read(self):
+        self.reads = getattr(self, "reads", 0) + 1
+        if self.reads > 60000:
+            raise AssertionError("the loop did not end")       # a failure, never a hang
         value = self.true_field() + self.random.uniform(-self.noise_g, self.noise_g)
         if self.resolution_g:
             value = round(value / self.resolution_g) * self.resolution_g
@@ -170,20 +179,22 @@ class GiveUpTests(unittest.TestCase):
                 magnet = Magnet(dead=True, noise_g=noise)
                 with self.assertRaises(app.MagnetFieldError) as raised:
                     drive(PID(500.0, 1.0, 100.0), magnet)
-                self.assertIn("did not change measurably", str(raised.exception))
+                for part in RESPONSE:
+                    self.assertIn(part, str(raised.exception))
                 self.assertEqual(steps_of(magnet), list(PROBES))
                 self.assertAlmostEqual(max(abs(c) for c in magnet.history), sum(PROBES))
 
-    def test_a_field_that_stops_following_ends_it_after_two_steps(self):
+    def test_a_field_that_stops_following_ends_it_at_the_first_step_it_does_not_answer(self):
         magnet = Magnet()
         pid = PID(2000.0, 1.0, 100.0)
         original = magnet.true_field
         magnet.true_field = lambda: original() if magnet.current <= 1.0 else 300.0 * 1.0 + 5.0   # stuck above 1 A
         with self.assertRaises(app.MagnetFieldError) as raised:
             drive(pid, magnet)
-        self.assertIn("does not follow", str(raised.exception))
+        for part in RESPONSE + ("The current is not changed further",):
+            self.assertIn(part, str(raised.exception))
         after = [c for c in magnet.history if c > 1.0]
-        self.assertLessEqual(len(after), 3)
+        self.assertLessEqual(len(after), 2, "the step across the stick, and one that got no answer")
         self.assertLess(max(magnet.history), 4.0, "not on to the 100 A maximum")
 
     def test_a_target_far_beyond_the_supply_is_refused_before_the_maximum(self):
@@ -219,7 +230,8 @@ class GiveUpTests(unittest.TestCase):
                 with self.assertRaises(app.MagnetFieldError) as raised:
                     drive(PID(300.0, 1.0, 100.0), magnet)
                 message = str(raised.exception)
-                self.assertTrue("G per A" in message or "did not change measurably" in message, message)
+                self.assertIn("gaussmeter may not be working", message)
+                self.assertTrue("G per A" in message or "did not respond" in message, message)
                 self.assertLessEqual(max(abs(c) for c in magnet.history), sum(PROBES) + 1e-9)
 
     def test_one_scattered_reading_does_not_switch_the_check_off(self):
@@ -240,7 +252,7 @@ class GiveUpTests(unittest.TestCase):
                     stuck[0] = field                # the probe stops following here
                 magnet.set(target)
                 self.assertLess(readings, 100)
-        self.assertIn("does not follow", str(raised.exception))
+        self.assertIn("did not respond", str(raised.exception))
         self.assertLess(max(magnet.history), 6.0, "not on to the 100 A maximum")
 
     def test_small_steps_against_a_stuck_reading_add_up_and_end_it(self):
@@ -253,8 +265,52 @@ class GiveUpTests(unittest.TestCase):
                 target = pid.update(magnet.current, magnet.true_field(), 2.0)   # readings as noisy as allowed
                 magnet.set(target)
                 self.assertLess(len(magnet.history), 60)
-        self.assertIn("does not follow", str(raised.exception))
+        self.assertIn("did not respond", str(raised.exception))
         self.assertLess(max(magnet.history), 500.0 / 300.0 + 0.5)
+
+    def test_a_reading_that_sticks_or_goes_wrong_on_the_way_costs_a_bounded_current(self):
+        """Any moment of the approach, on each supply: the current after the
+        fault stays within about one full step and a check's worth, never
+        on to the maximum (review, 2026-11-14)."""
+        worst = {}
+        for label, max_a, g_per_a, target in (("LS648", 100.0, 300.0, 25000.0), ("LS643", 40.0, 100.0, 3500.0),
+                                              ("4886", 10.0, 300.0, 2500.0), ("weak magnet", 10.0, 30.0, 250.0)):
+            for kind in ("sticks", "reads 10 kG", "reads 0"):
+                for fail_at in range(2, 26):
+                    magnet = Magnet(g_per_a=g_per_a, remanence=0.0)
+                    pid = PID(target, 2.0, max_a)
+                    wrong, count, at = [None], [0], [None]
+                    read = magnet.read
+
+                    def reading():
+                        if wrong[0] is not None:
+                            return wrong[0]
+                        return read()
+                    magnet.read = reading
+                    try:
+                        while True:
+                            values = [magnet.read() for _ in range(3)]
+                            count[0] += 1
+                            if count[0] == fail_at and wrong[0] is None:
+                                wrong[0] = {"sticks": values[0], "reads 10 kG": 10000.0, "reads 0": 0.0}[kind]
+                                at[0] = magnet.current
+                            following = pid.update(magnet.current, sum(values) / 3.0, max(values) - min(values))
+                            if following is None:
+                                break                       # reached before the fault, or held on a stuck reading
+                            magnet.set(following)
+                            self.assertLess(count[0], 400, (label, kind, fail_at))
+                    except app.MagnetFieldError:
+                        pass
+                    if at[0] is not None:
+                        travel = max(abs(c - at[0]) for c in magnet.history[magnet.history.index(at[0]):])
+                        key = (label, "sticks" if kind == "sticks" else "a constant")
+                        worst[key] = max(worst.get(key, 0.0), travel)
+        # A reading that sticks: one full step (a tenth of the maximum) and
+        # what a check needs.  A constant can happen to look like the answer
+        # to the step just taken, once: two full steps.
+        for label, step in (("LS648", 10.0), ("LS643", 4.0), ("4886", 1.0), ("weak magnet", 1.0)):
+            self.assertLess(worst[(label, "sticks")], step + 1.5, worst)
+            self.assertLess(worst[(label, "a constant")], 2.0 * step + 1.5, worst)
 
     def test_a_supply_too_small_for_the_probes_is_refused(self):
         pid = PID(500.0, 1.0, 0.05)
@@ -272,8 +328,8 @@ class GiveUpTests(unittest.TestCase):
                 magnet = Magnet(g_per_a=g_per_a, resolution_g=1.0, remanence=0.4)
                 with self.assertRaises(app.MagnetFieldError) as raised:
                     drive(PID(500.0, 2.0, 100.0), magnet)
-                message = str(raised.exception)         # too weak, or not following: stopped either way
-                self.assertTrue("G per A" in message or "does not follow" in message, message)
+                message = str(raised.exception)         # too weak, or not answering: stopped either way
+                self.assertTrue("G per A" in message or "did not respond" in message, message)
                 self.assertLess(max(abs(c) for c in magnet.history), 2.0)
         for seed in range(300):
             magnet = Magnet(g_per_a=19.0, noise_g=0.15, seed=seed)
@@ -346,6 +402,27 @@ class Lagging:
         return self.field
 
 
+class Creeping:
+    """A magnet whose field follows the current at once but for a fraction
+    that arrives over 30 s, on a clock that only the loop's waits move."""
+
+    def __init__(self, fraction, g_per_a=200.0, tau_s=30.0):
+        self.fraction, self.g_per_a, self.tau_s = fraction, g_per_a, tau_s
+        self.current, self.slow, self.clock, self.history = 0.0, 0.0, 0.0, [0.0]
+
+    def wait(self, seconds):
+        self.clock += seconds
+        self.slow += (self.current - self.slow) * (1.0 - math.exp(-seconds / self.tau_s))
+
+    def set(self, current):
+        self.current = float(current)
+        self.history.append(self.current)
+        self.wait(abs(self.history[-1] - self.history[-2]) / 5.0)     # ramped at 5 A/s
+
+    def read(self):
+        return self.g_per_a * ((1.0 - self.fraction) * self.current + self.fraction * self.slow)
+
+
 class SettledReadingTests(unittest.TestCase):
     def test_a_steady_field_is_two_groups_of_three_readings(self):
         reads = []
@@ -400,6 +477,172 @@ class SettledReadingTests(unittest.TestCase):
         first.set()
         second.clear()
         self.assertTrue(both.is_set())
+
+
+class HoldTests(unittest.TestCase):
+    """User, 2026-11-14: "keep regulating the field after it reaches the
+    target"."""
+
+    class Stop(Exception):
+        pass
+
+    def hold(self, magnet, target, tolerance, max_current, cycles, each=None):
+        """The loop with hold, ended after ``cycles`` held readings; returns
+        (readings, the PID)."""
+        readings = []
+        pid = PID(target, tolerance, max_current)
+
+        def progress(reading):
+            readings.append(reading)
+            if each is not None:
+                each(reading)
+            if sum(1 for r in readings if r["holding"]) >= cycles:
+                raise self.Stop()
+
+        with self.assertRaises(self.Stop):
+            app.set_magnet_field(pid, magnet.current, magnet.set, magnet.read, lambda _s: None, progress, hold=True)
+        return readings, pid
+
+    def test_it_never_returns_and_changes_nothing_while_the_field_stays(self):
+        magnet = Magnet()
+        waits = []
+        with self.assertRaises(self.Stop):
+            count = [0]
+
+            def progress(reading):
+                count[0] += reading["holding"]
+                if count[0] >= 5:
+                    raise self.Stop()
+            app.set_magnet_field(PID(500.0, 1.0, 10.0), 0.0, magnet.set, magnet.read, waits.append, progress,
+                                 hold=True)
+        reached = len(magnet.history)
+        self.assertLessEqual(abs(magnet.true_field() - 500.0), 1.0)
+        self.assertEqual(waits.count(app.MAGNET_FIELD_HOLD_INTERVAL_S), 4, "a pause after each held reading")
+        self.assertEqual(len(magnet.history), reached)
+
+    def test_a_drifting_field_is_followed_and_never_taken_for_a_dead_gaussmeter(self):
+        magnet = Magnet(remanence=0.0)
+
+        def drift(_reading):
+            magnet.remanence -= 0.1             # the field sags a little at every reading
+        readings, pid = self.hold(magnet, 800.0, 1.0, 10.0, cycles=400, each=drift)
+        held = [r for r in readings if r["holding"]]
+        self.assertLess(max(abs(r["field_g"] - 800.0) for r in held), 3.0)
+        self.assertLess(magnet.remanence, -40.0)
+        self.assertGreater(magnet.current, 800.0 / 300.0 + 0.1, "the current made the drift up")
+        self.assertLessEqual(pid.step_limit_a, app.MAGNET_FIELD_SET_MAX_STEP_A)
+        self.assertLess(pid.corrections, 5, "counted from the last reading within the tolerance")
+
+    def test_the_held_current_may_not_wander_far_from_where_the_target_was_reached(self):
+        """A magnet's field at a constant current drifts by far less than
+        5 %: more is the gaussmeter.  Nothing else stops these over the
+        hours of a hold (review, 2026-11-14): each small correction is
+        followed by a reading within the tolerance."""
+        cases = (
+            # A meter that no longer sees the magnet and reads noise at the edge of the tolerance.
+            ("noise at the band's edge", lambda magnet, held, random: 800.0 + 1.8 + random.gauss(0.0, 0.3)),
+            # A reading that fades as the probe creeps out of the gap.
+            ("a fading reading", lambda magnet, held, random: magnet.true_field() * math.exp(-held[0] / 4000.0)),
+            # The meter's zero drifting.
+            ("a drifting zero", lambda magnet, held, random: magnet.true_field() - 0.05 * held[0]),
+        )
+        for label, wrong in cases:
+            with self.subTest(label):
+                magnet = Magnet(g_per_a=40.0, remanence=0.0)        # 800 G at 20 A
+                pid = PID(800.0, 2.0, 100.0)
+                random_ = random.Random(5)
+                held = [0]
+                read = magnet.read
+                magnet.read = lambda: (read(), wrong(magnet, held, random_))[1] if held[0] else read()
+
+                def progress(reading):
+                    held[0] += 1 if reading["holding"] or held[0] else 0
+                    self.assertLess(held[0], 40000, "it went on for ever")
+                with self.assertRaises(app.MagnetFieldError) as raised:
+                    app.set_magnet_field(pid, 0.0, magnet.set, magnet.read, lambda _s: None, progress, hold=True)
+                self.assertIn("The gaussmeter may not be working", str(raised.exception))
+                self.assertLessEqual(abs(magnet.current - 20.0), 0.05 * 20.0 + 0.5 + 0.01,
+                                     "within 5 % of the current it was reached at, and one step")
+
+    def test_a_magnet_whose_field_creeps_after_a_ramp_is_reached_and_held(self):
+        """An iron magnet's field goes on rising by a percent or so for some
+        tens of seconds after a ramp.  A small trim that such creep hides
+        was taken for a gaussmeter that does not answer (review,
+        2026-11-14)."""
+        for creep in (0.003, 0.01, 0.03):
+            with self.subTest(creep=creep):
+                magnet = Creeping(creep)
+                pid = PID(15000.0, 2.0, 100.0)
+                held = [0]
+
+                def progress(reading):
+                    held[0] += reading["holding"]
+                    if magnet.clock > 600.0:
+                        raise self.Stop()
+                with self.assertRaises(self.Stop):
+                    app.set_magnet_field(pid, 0.0, magnet.set, magnet.read, magnet.wait, progress, hold=True)
+                self.assertGreater(held[0], 20, "held, not stopped")
+                self.assertLessEqual(abs(magnet.read() - 15000.0), 2.0 + 1.0)
+
+    def test_a_small_tolerance_on_a_large_field_is_not_stopped_by_the_meters_own_noise(self):
+        """±0.5 G on 10 kG: a settled reading may scatter by 0.2 % of the
+        field, so the jump rule allows three times that, not 2.5 G."""
+        pid = PID(10000.0, 0.5, 100.0)
+        self.assertEqual(pid._jump_g(10000.0), 3.0 * 20.0)
+        self.assertEqual(PID(500.0, 2.0, 10.0)._jump_g(500.0), 5.0 * 2.0)
+        magnet = Magnet(g_per_a=150.0, noise_g=1.5, seed=4)
+        magnet.current = magnet.history[0] = 66.6       # already near it: 9995 G
+        readings, _pid = self.hold(magnet, 10000.0, 0.5, 100.0, cycles=300)
+        self.assertGreaterEqual(sum(1 for r in readings if r["holding"]), 300)
+
+    def test_a_reading_that_jumps_during_a_hold_is_never_corrected(self):
+        """A magnet's field does not jump at a constant current: the
+        gaussmeter failed, or its probe moved.  A reading that halves still
+        "responds" to the current, and was followed to twice the current."""
+        for label, dead in (("reads zero", lambda field: 0.0), ("reads half", lambda field: 0.5 * field),
+                            ("sticks 40 G low", lambda field: 760.0)):
+            with self.subTest(label):
+                magnet = Magnet(g_per_a=100.0)
+                pid = PID(800.0, 1.0, 100.0)            # an LS648
+                failed = [False]
+                read = magnet.read
+                magnet.read = lambda: dead(read()) if failed[0] else read()
+
+                def progress(reading):
+                    if reading["holding"] and len(magnet.history) > 3:
+                        failed[0] = True
+                with self.assertRaises(app.MagnetFieldError) as raised:
+                    app.set_magnet_field(pid, 0.0, magnet.set, magnet.read, lambda _s: None, progress, hold=True)
+                message = str(raised.exception)
+                self.assertIn("while the magnet supply current stayed at", message)
+                self.assertIn("The current is not changed. The gaussmeter may not be working", message)
+                self.assertLessEqual(abs(100.0 * magnet.current + 5.0 - 800.0), 1.0, "left where it held the field")
+
+    def test_a_gaussmeter_that_stops_answering_after_a_correction_costs_one_small_step(self):
+        """It drifts out of the tolerance (corrected), then sticks: the
+        correction it does not answer is the last."""
+        magnet = Magnet(g_per_a=100.0)
+        pid = PID(800.0, 1.0, 100.0)
+        stuck = [None]
+        read = magnet.read
+        magnet.read = lambda: stuck[0] if stuck[0] is not None else read()
+
+        def progress(reading):
+            if reading["holding"] and len(magnet.history) > 3 and stuck[0] is None:
+                stuck[0] = reading["field_g"] - 3.0     # 3 G low, and there it stays
+        with self.assertRaises(app.MagnetFieldError) as raised:
+            app.set_magnet_field(pid, 0.0, magnet.set, magnet.read, lambda _s: None, progress, hold=True)
+        # By the check of the steps together, or by how far the held current may move.
+        for part in ("The gaussmeter may not be working", "The current is not changed further"):
+            self.assertIn(part, str(raised.exception))
+        self.assertLess(abs(100.0 * magnet.current + 5.0 - 800.0), 100.0 * 0.5 + 1.0, "under one 0.5 A step")
+
+    def test_the_reading_says_when_it_is_holding(self):
+        magnet = Magnet()
+        readings, _pid = self.hold(magnet, 500.0, 1.0, 10.0, cycles=2)
+        self.assertEqual([r["holding"] for r in readings[-2:]], [True, True])
+        self.assertFalse(readings[0]["holding"])
+        self.assertTrue(all(r["next_current_a"] is None for r in readings[-2:]))
 
 
 class Gauss:
@@ -485,11 +728,14 @@ class KepcoRunTests(unittest.TestCase):
 
     def test_a_zero_off_that_forgot_the_stop_still_cannot_switch_the_output_back_on(self):
         card, kepco, supply, _gauss = self.rig()
+        seen = [0.0]
 
         def field():
+            if kepco.output_owned:
+                seen[0] = card.current
             if len(card.writes) >= 8 and kepco.output_owned:
-                kepco.force_output_off()
-            return 300.0 * card.current + 5.0
+                kepco.force_output_off()        # the reading stays: the loop goes on to its next step
+            return 300.0 * seen[0] + 5.0
 
         with self.assertRaises(RuntimeError) as raised:
             app.run_magnet_field_set(supply, Gauss(field), 2500.0, 1.0, 5.0, Instant())

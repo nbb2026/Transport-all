@@ -1,5 +1,67 @@
 # Magneto-Electro-Optical Transport Experiment Control Directory
 
+## Set field keeps regulating, and stops when the field does not respond (user, 2026-11-14)
+
+- **Holding** (user: "keep regulating the field after it reaches the target"). Set field on FMR, SHV and ST-FMR no
+  longer ends at the target. The field is read again every `MAGNET_FIELD_HOLD_INTERVAL_S` (1 s, plus the settled
+  reading itself) and the current corrected whenever the field has left the tolerance, until it is stopped.
+  - **Stop hold:** while a field is set or held the Set field button reads "Stop hold": it ends the regulation and
+    leaves the current. Zero / OFF ends it and zeroes the supply, as before. The page stays busy meanwhile (the
+    magnet job count on FMR and ST-FMR, the rack on SHV), so a scan starts only after it.
+  - **Status:** "Holding +500 ± 1 G: I +1.653 A, B +500.2 G"; the page log says when the target was first reached
+    and when the regulation stopped; a failure after that reads "Field lost: ...".
+  - **A drift is not a fault:** a reading within the tolerance starts the next check of the field against the
+    current from there, and a reading at an unchanged current moves the check's start to it, so the field's own
+    drift before a correction is not laid at the correction. The corrections allowed (`max_steps`) count from the
+    last reading within the tolerance, and the step limit goes back to 0.5 A there.
+- **The field does not respond** (user: "when the current increase while the field not respond stop increasing the
+  current and return that the Gauss meter may not work"). One change of the current that the field did not answer
+  (under a quarter of the predicted change, or the other way: `MAGNET_FIELD_SET_MIN_RESPONSE_RATIO`) now ends it;
+  it took two. The current is not changed again, and the message says the gaussmeter may not be working (on, its
+  range, its probe in the gap). The probe steps' failure and a coupling under 20 G/A say the same.
+- **A reading that jumps during a hold** (found while testing the hold: a reading that halved still "responded" and
+  was followed to twice the current). While the field is held, a reading that has moved by more than
+  `MAGNET_FIELD_HOLD_JUMP_TOLERANCES` (5) tolerances since the last one, the current unchanged, is not corrected at
+  all: a magnet's field does not jump at a constant current, so the gaussmeter (probe moved, range changed, failed)
+  is reported and the current left as it is.
+- **From the review of the hold, before it shipped:**
+  - **A second click on Stop hold started a new field setting**, and a click on it just after Zero / OFF switched
+    the magnet back on: the button is "Set field" again a moment after the job ends. A press within
+    `MAGNET_FIELD_RESTART_LOCKOUT_S` (2 s) of a field setting's end now starts nothing.
+  - **Nothing bounded the held current over hours**: each small correction was followed by a reading within the
+    tolerance, which starts the check afresh, so a gaussmeter reading noise at the tolerance's edge, fading, or
+    drifting walked the current. The held current may now move at most `MAGNET_FIELD_HOLD_TRAVEL_FRACTION` (5 %) of
+    the current at which the target was first reached, or `MAGNET_FIELD_HOLD_MIN_TRAVEL_A` (0.2 A) if that is more;
+    beyond it the regulation stops and the gaussmeter is reported.
+  - **The single miss stopped healthy magnets**: an iron magnet's field creeps by a percent or so after a ramp, and a
+    small trim hidden by it was taken for a gaussmeter that does not answer. A change of the current is now judged
+    once it should have changed the field by `MAGNET_FIELD_SET_CHECK_FIELD_FRACTION` (5 %) of the field (and five
+    tolerances); smaller trims add up until then. A meter that has stopped answering is so found once the current has
+    moved by about 5 % of itself.
+  - **The jump rule false-stopped at a small tolerance on a large field** (±0.5 G on 10 kG: the meter's own noise).
+    It is now five tolerances or three times the scatter a settled reading may have (0.6 % of the field), whichever
+    is more.
+  - **Second pass:** G per A is kept, not lowered, after a change the field answered only in part (a reading that
+    stuck half-way through a step quartered it, and the next check came four times later); the 5 % is of the field at
+    that point, never of more than the target or the starting field (a garbage reading of 10 kG on a weak magnet put
+    the check out of reach); SHV's Set field waits for a Lake Shore Zero / OFF ramp, as FMR's and ST-FMR's do; the
+    2 s after an end hold a press back only after a stop, not after an error. A reading that sticks on the way now
+    costs about one step (a tenth of the supply's maximum) more current; a constant that happens to look like the
+    answer to the step just taken, two.
+  - **Known and accepted:** while a field is held the page's worker is busy (except FMR with the 4886), so the page's
+    other jobs wait: ST-FMR's live lock-in readings pause, a Connect waits. A real step of the field at a constant
+    current beyond the jump rule ends the hold. A gaussmeter that fades slower than the travel limit catches is
+    followed up to that limit.
+- **Keep in focus** (found by a static check of the whole program before this build, at the user's request): a
+  check before a scan point that failed was not reported. Its report runs later on the Tk thread and named the caught
+  error after its except block had ended (NameError), so Keep in focus stayed ticked without a message. The text is
+  now made before the block ends; `test_auto_focus.py` has the case.
+- **Tests:** `test_magnet_field_set.py` (holding, a drifting field, a creeping magnet, a gaussmeter that fails,
+  jumps, fades, drifts or reads noise during a hold, a small tolerance on a large field),
+  `test_field_setting_pages.py` (each page held and stopped with Stop hold; a drift made up on the FMR page; a
+  gaussmeter failing during a hold; a second click on Stop hold and a click after Zero / OFF). Loops in these
+  tests are capped, so one that does not end fails instead of hanging.
+
 ## A magnetic-field setting on FMR, SHV and ST-FMR (user, 2026-11-14)
 
 User: "Add a magnetic field setting in FMR, SHV, STFMR modules. You can try to use PID to control the magnetic field

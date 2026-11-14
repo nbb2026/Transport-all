@@ -171,7 +171,9 @@ microwave source and lock-in detection, with MFLI, SR830 or both together.
 (since 2026-11-14): type the target in G and its tolerance, tick the page's
 safety confirmation, and press Set field. The program steps the page's chosen
 magnet supply (the KEPCO 4886 or its Lake Shore) until the Lake Shore 475
-reads the target within the tolerance, then leaves the current there.
+reads the target within the tolerance, and then keeps the field there: it
+reads the LS475 again about every two seconds and corrects the current
+whenever the field has left the tolerance.
 - **Where:** in the field-output box on FMR (a row of its own) and STFMR
   (right of the safety tick); in the instrument rack under the LS475's
   reading on SHV.
@@ -183,13 +185,28 @@ reads the target within the tolerance, then leaves the current there.
 - **Reading the field:** after every step it waits 0.5 s, then reads the
   LS475 in groups of three until two groups in a row agree within the
   tolerance. A field that is still moving is waited for, up to 15 s.
-- **Stopping:** the page's red Zero / OFF ends it and zeroes the supply.
+- **Stopping:** while a field is being set or held the button reads
+  **Stop hold**: it ends the regulation and leaves the current where it is.
+  The page's red Zero / OFF ends it and zeroes the supply. For two seconds
+  after it ends the button starts nothing, so a double-click cannot restart
+  it. The page is busy until one of them is pressed: a scan cannot start
+  while a field is held, and on STFMR the live lock-in readings pause.
 - **When it gives up** it leaves the current where the last step put it and
   says why:
   - the gaussmeter did not respond to the probe steps, or sees under 20 G per
     A, as a probe outside the magnet's gap does (the current has then moved
     0.62 A at most);
-  - the field stopped following the current;
+  - the current was changed and the field did not respond (under a quarter
+    of the expected change, judged once the change is worth 5 % of the
+    field): the current is not changed again, and the message says the
+    gaussmeter may not be working;
+  - while a field is held, the reading jumped with the current unchanged (by
+    more than five tolerances, or 0.6 % of the field if that is more): the
+    probe moved, the range changed or the meter failed, and the current is
+    not changed at all;
+  - while a field is held, the current would have to move more than 5 % (or
+    0.2 A) from where the target was first reached: a magnet's field does
+    not drift that far, so the gaussmeter is drifting or fading;
   - the field did not settle within 15 s, or the readings are noisier than
     the tolerance;
   - the target needs more than the supply's maximum current;
@@ -200,7 +217,8 @@ reads the target within the tolerance, then leaves the current there.
   wrongly (slipped partly out of the gap, on the wrong range) is followed, up
   to the supply's maximum current. Check the probe before a large field, and
   keep the supply's own current limit set for your magnet.
-- The scans are unchanged: they still set currents, not fields.
+- The scans are unchanged: they still set currents, not fields, and start
+  only once the regulation has been stopped.
 
 **Plot pictures.** Every scan saves a screenshot of its plots in its run
 folder when it ends, whether it completed, was stopped or failed, as long as

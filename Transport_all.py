@@ -1792,9 +1792,49 @@ MAGNET_FIELD_SET_MIN_G_PER_A = 20.0
 # of the supply's maximum current, and any other step brings it back.
 MAGNET_FIELD_SET_MAX_STEP_A = MAGNET_FIELD_ZERO_MAX_STEP_A
 MAGNET_FIELD_SET_MAX_STEP_FRACTION = 0.1
-# Two checks in a row in which the field changed by under a quarter of the
-# predicted change, or the other way, end it: it does not follow the current.
-MAGNET_FIELD_SET_MISSES = 2
+# A change of the current after which the field has changed by under this
+# fraction of the predicted change, or the other way, ends it at once: the
+# current is not raised again and the gaussmeter is reported (user,
+# 2026-11-14: "when the current increase while the field not respond stop
+# increasing the current and return that the Gauss meter may not work").
+MAGNET_FIELD_SET_MIN_RESPONSE_RATIO = 0.25
+# ... judged once the change of the current since the last check should
+# have changed the field by this fraction of the field there (and by five
+# tolerances; the field counted is never more than the larger of the target
+# and the field it started from, since a reading far above both is the
+# fault itself): a small trim is not judged alone, because
+# the field of an iron magnet still creeps by a percent or so after a ramp,
+# and that would be taken for a gaussmeter that does not answer (review,
+# 2026-11-14).  A meter that has stopped answering is so found once the
+# current has moved by about this fraction of itself.
+MAGNET_FIELD_SET_CHECK_FIELD_FRACTION = 0.05
+# Once the field is within the tolerance it is kept there (user, 2026-11-14:
+# "keep regulating the field after it reaches the target"): read again this
+# long after each reading that needed no correction, until Stop hold or
+# Zero / OFF.
+MAGNET_FIELD_HOLD_INTERVAL_S = 1.0
+# While it is held, a reading that has moved by more than this many
+# tolerances since the last one, the current unchanged, is not corrected:
+# a magnet's field does not jump at a constant current, so the gaussmeter
+# (its probe moved, its range changed, it failed) is reported and the
+# current left as it is.
+MAGNET_FIELD_HOLD_JUMP_TOLERANCES = 5.0
+# ... or, if that is more, three times the scatter a settled reading may
+# have (review, 2026-11-14: at ±0.5 G on 10 kG the meter's own noise set it
+# off).
+MAGNET_FIELD_HOLD_JUMP_SCATTERS = 3.0
+# While it is held, the current may move this far from where the target was
+# first reached: this fraction of that current, or this many A if that is
+# more.  A magnet's field at a constant current drifts by far less, so more
+# is the gaussmeter drifting, fading or no longer seeing the magnet, which
+# nothing else would stop over the hours of a hold (review, 2026-11-14).
+MAGNET_FIELD_HOLD_TRAVEL_FRACTION = 0.05
+MAGNET_FIELD_HOLD_MIN_TRAVEL_A = 0.2
+# After a field setting ends, a press of its button within this long starts
+# nothing: the second click of a double-click on "Stop hold", or a click on
+# it just after Zero / OFF, found the button already "Set field" again and
+# switched the magnet back on (review, 2026-11-14).
+MAGNET_FIELD_RESTART_LOCKOUT_S = 2.0
 # Setpoints are whole mA: the Lake Shores' SETI resolution.
 MAGNET_FIELD_SET_RESOLUTION_A = 0.001
 # After each step: this wait, then groups of this many readings, this far
@@ -1809,8 +1849,8 @@ MAGNET_FIELD_SET_GROUP_GAP_S = 0.3
 MAGNET_FIELD_SET_SETTLE_TIMEOUT_S = 15.0
 MAGNET_FIELD_SET_SETTLE_REL_TOLERANCE = 0.002
 MAGNET_FIELD_SET_DEFAULT_TOLERANCE_G = 2.0
-# Corrections allowed: enough to cross the supply's whole range at the first
-# step size, and some to settle.
+# Corrections allowed between two readings within the tolerance: enough to
+# cross the supply's whole range at the first step size, and some to settle.
 MAGNET_FIELD_SET_EXTRA_STEPS = 30
 MAGNET_DEFAULT_PORTS = {
     "OUT_BOP": "COM14",
@@ -4834,11 +4874,19 @@ class MagnetFieldPID:
     - Every change of the current is checked against the field change it
       should have made, small steps together once they add up; the scatter
       that counts is that of the readings at its two ends only (review,
-      2026-11-14: one noisy reading used to switch the check off).
+      2026-11-14: one noisy reading used to switch the check off).  A
+      change the field did not answer ends it at once (user, 2026-11-14):
+      the current is not raised again, and the gaussmeter is reported.
+    - It can go on for ever, holding the field (user, 2026-11-14): a
+      reading within the tolerance needs no correction, starts the next
+      check from there (a slow drift of the field is then not taken for a
+      field that does not follow), and brings the step limit back to its
+      first value.  A reading that jumps while the current is unchanged
+      is not corrected at all: the gaussmeter is reported.
     - It ends with MagnetFieldError, the current left where it is, when the
-      field does not answer the probes, does not follow twice in a row,
-      needs more than the supply's maximum, needs a step finer than a
-      setpoint, or is not reached within ``max_steps`` corrections."""
+      field does not answer the probes or a step, needs more than the
+      supply's maximum, needs a step finer than a setpoint, or is not
+      brought back within ``max_steps`` corrections."""
 
     def __init__(self, target_g, tolerance_g, max_current_a, *, supply: str = "magnet supply",
                  kp: float = MAGNET_FIELD_SET_KP, ki: float = MAGNET_FIELD_SET_KI,
@@ -4858,9 +4906,19 @@ class MagnetFieldPID:
         # (current, field, scatter).
         self.anchor: tuple[float, float, float] | None = None
         self.errors: list[float] = []
+        # Corrections in all (for the page), and since the field was last
+        # within the tolerance (against max_steps).
         self.steps = 0
+        self.corrections = 0
         self.probes = 0
-        self.misses = 0
+        # True once the field has been within the tolerance: held from then,
+        # within hold_travel_a of the current it was first reached at.
+        self.reached = False
+        self.reached_current_a: float | None = None
+        self.hold_travel_a = math.inf
+        # The field this run spans, for the size of a change worth judging:
+        # the target, or the first reading if that is larger.
+        self.span_g = abs(self.target_g)
         # True once a change of the current made the predicted field change:
         # G per A is then trusted enough to refuse a target far beyond the
         # maximum.
@@ -4881,19 +4939,46 @@ class MagnetFieldPID:
         error = self.target_g - field
         self.errors = (self.errors + [error])[-3:]
         if abs(error) <= self.tolerance_g:
+            # Held from here: the next check starts at this reading, with
+            # the first step limit again.
+            self.reached, self.corrections = True, 0
+            if self.reached_current_a is None:
+                self.reached_current_a = current
+                self.hold_travel_a = max(MAGNET_FIELD_HOLD_MIN_TRAVEL_A,
+                                         MAGNET_FIELD_HOLD_TRAVEL_FRACTION * abs(current))
+            self.anchor = (current, field, scatter)
+            self.step_limit_a = MAGNET_FIELD_SET_MAX_STEP_A
             return None
-        if self.steps >= self.max_steps:
+        if (self.reached and self.anchor is not None
+                and abs(current - self.anchor[0]) < 0.5 * MAGNET_FIELD_SET_RESOLUTION_A
+                and abs(field - self.anchor[1]) > self._jump_g(self.anchor[1])):
             raise MagnetFieldError(
-                f"Target {self.target_g:+g} G ± {self.tolerance_g:g} G not reached after {self.steps} corrections; "
-                f"the field at {current:+g} A is {field:+.6g} G")
+                f"The field reading changed by {field - self.anchor[1]:+.4g} G (from {self.anchor[1]:+.6g} G to "
+                f"{field:+.6g} G) while the {self.supply} current stayed at {current:+g} A. The current is not "
+                "changed. The gaussmeter may not be working, or its probe has moved or changed range: check it "
+                "before setting the field again")
+        if self.corrections >= self.max_steps:
+            raise MagnetFieldError(
+                f"Target {self.target_g:+g} G ± {self.tolerance_g:g} G not reached after {self.corrections} "
+                f"corrections; the field at {current:+g} A is {field:+.6g} G")
         self.steps += 1
+        self.corrections += 1
         if self.anchor is None:
             self.anchor = (current, field, scatter)
+            self.span_g = max(self.span_g, abs(field))
         else:
             self._learn(current, field, scatter)
         if self.slope_g_per_a is None:
             return self._probe(current, field, scatter)
         return self._correct(current, field, error)
+
+    def _jump_g(self, field: float) -> float:
+        """How far a held reading may move, the current unchanged, and still
+        be corrected: five tolerances, or three times the scatter a settled
+        reading of this field may have."""
+        return max(MAGNET_FIELD_HOLD_JUMP_TOLERANCES * self.tolerance_g,
+                   MAGNET_FIELD_HOLD_JUMP_SCATTERS
+                   * max(self.tolerance_g, MAGNET_FIELD_SET_SETTLE_REL_TOLERANCE * abs(field)))
 
     def _learn(self, current: float, field: float, scatter: float) -> None:
         """G per A from the change of the current since the last check, and
@@ -4901,6 +4986,9 @@ class MagnetFieldPID:
         anchor_a, anchor_g, anchor_scatter = self.anchor
         delta_a, delta_g = current - anchor_a, field - anchor_g
         if abs(delta_a) < 0.5 * MAGNET_FIELD_SET_RESOLUTION_A:
+            # The current has not moved: the check starts from this reading,
+            # so a drift of the field before a step is not laid at the step.
+            self.anchor = (current, field, scatter)
             return
         # The smallest field change that counts as the magnet's answer.
         floor = max(MAGNET_FIELD_SET_MIN_RESPONSE_G, 5.0 * max(scatter, anchor_scatter))
@@ -4913,26 +5001,25 @@ class MagnetFieldPID:
                 raise MagnetFieldError(
                     f"The gaussmeter sees only {abs(slope):.3g} G per A of the {self.supply} current ({delta_g:+.3g} G "
                     f"for {delta_a:+.3f} A), under the {MAGNET_FIELD_SET_MIN_G_PER_A:g} G per A a probe in the "
-                    "magnet's gap gives. Check the probe's position and that it is this magnet's")
+                    "magnet's gap gives. The gaussmeter may not be working, or its probe is not in this magnet's gap")
             self.slope_g_per_a, self.anchor = slope, (current, field, scatter)
             return
         expected = self.slope_g_per_a * delta_a
-        if abs(expected) < 2.0 * floor:
+        # 5 % of the field here, but never of more than the run spans: a
+        # reading far above both the target and where it started is the fault.
+        here_g = min(max(abs(field), abs(anchor_g)), self.span_g)
+        enough = max(2.0 * floor, 5.0 * self.tolerance_g, MAGNET_FIELD_SET_CHECK_FIELD_FRACTION * here_g)
+        if abs(expected) < enough:
             return      # checked once the steps add up to more
         self.anchor = (current, field, scatter)
         ratio = delta_g / expected
-        if ratio < 0.25:
-            self.misses += 1
-            self.step_limit_a = MAGNET_FIELD_SET_MAX_STEP_A
-            if self.misses >= MAGNET_FIELD_SET_MISSES:
-                raise MagnetFieldError(
-                    f"The field does not follow the {self.supply} current: the last {delta_a:+.3f} A should have "
-                    f"changed it by about {expected:+.4g} G and changed it by {delta_g:+.4g} G. Check the "
-                    "gaussmeter probe's position and range, the magnet's wiring and the supply's front panel")
-            if ratio > 0.0 and abs(delta_g) >= floor and abs(delta_g / delta_a) >= MAGNET_FIELD_SET_MIN_G_PER_A:
-                self.slope_g_per_a = delta_g / delta_a      # a magnet that is saturating
-            return
-        self.misses = 0
+        if ratio < MAGNET_FIELD_SET_MIN_RESPONSE_RATIO:
+            raise MagnetFieldError(
+                f"The {self.supply} current was changed by {delta_a:+.3f} A and the field did not respond: it "
+                f"should have changed by about {expected:+.4g} G and changed by {delta_g:+.4g} G. The current is not "
+                "changed further. The gaussmeter may not be working: check that it is on, on a range that holds "
+                "this field, and that its probe is in this magnet's gap (or the magnet is saturating, or the "
+                "supply's output is limited at its front panel)")
         slope = delta_g / delta_a
         if abs(slope) < MAGNET_FIELD_SET_MIN_G_PER_A:
             # Also later: a first probe step that over-read (a display step,
@@ -4941,9 +5028,19 @@ class MagnetFieldPID:
             raise MagnetFieldError(
                 f"The field now changes by only {abs(slope):.3g} G per A of the {self.supply} current ({delta_g:+.4g} G "
                 f"for {delta_a:+.3f} A), under the {MAGNET_FIELD_SET_MIN_G_PER_A:g} G per A a probe in the magnet's "
-                "gap gives: the probe is not in this magnet's gap, or the magnet is saturating")
+                "gap gives. The gaussmeter may not be working, its probe is not in this magnet's gap, or the "
+                "magnet is saturating")
+        if ratio < 0.7:
+            # Answered in part: the step limit goes back, and G per A is kept
+            # as it was.  A reading that stopped answering half-way through
+            # the change gives a ratio like this, and taking its smaller G
+            # per A made the next steps, and the current before the next
+            # check, several times larger (review, 2026-11-14).  A magnet
+            # that is saturating is approached in smaller steps instead.
+            self.step_limit_a = MAGNET_FIELD_SET_MAX_STEP_A
+            return
         self.slope_g_per_a = slope
-        if 0.7 <= ratio <= 1.3:
+        if ratio <= 1.3:
             self.confirmed = True
             self.step_limit_a = min(2.0 * self.step_limit_a, self.step_limit_max_a)
         else:
@@ -4954,10 +5051,11 @@ class MagnetFieldPID:
         if self.probes >= len(MAGNET_FIELD_SET_PROBES_A):
             floor = max(MAGNET_FIELD_SET_MIN_RESPONSE_G, 5.0 * max(scatter, self.anchor[2]))
             raise MagnetFieldError(
-                f"The gaussmeter field did not change measurably with the {self.supply} current: "
-                f"{field - self.anchor[1]:+.3g} G for {current - self.anchor[0]:+.3f} A (it reads {field:+.6g} G at "
-                f"{current:+g} A; a change under {floor:.3g} G does not count). Check the gaussmeter probe's "
-                "position and range, the magnet's wiring and the supply's front panel")
+                f"The {self.supply} current was changed by {current - self.anchor[0]:+.3f} A and the field did not "
+                f"respond: it changed by {field - self.anchor[1]:+.3g} G (it reads {field:+.6g} G at {current:+g} A; "
+                f"a change under {floor:.3g} G does not count). The current is not changed further. The gaussmeter "
+                "may not be working: check that it is on, on a range that holds this field, and that its probe "
+                "is in this magnet's gap (or the magnet's wiring, or the supply's front panel)")
         size = MAGNET_FIELD_SET_PROBES_A[self.probes]
         self.probes += 1
         target = current + size
@@ -4992,6 +5090,14 @@ class MagnetFieldPID:
                     f"{field:+.6g} G; use a larger tolerance")
             delta = math.copysign(resolution, whole)
         target = round(max(-self.max_current_a, min(self.max_current_a, current + delta)), 3)
+        if self.reached_current_a is not None and abs(target - self.reached_current_a) > self.hold_travel_a:
+            raise MagnetFieldError(
+                f"While the field was held, the {self.supply} current has moved from the {self.reached_current_a:+g} A "
+                f"at which {self.target_g:+g} G was first reached to {current:+g} A, and the next step would take it "
+                f"more than {self.hold_travel_a:.3g} A away. A magnet's field does not drift that far at a constant "
+                "current. The current is not changed further. The gaussmeter may not be working: its reading is "
+                f"drifting or fading (it reads {field:+.6g} G), or its probe is moving out of the gap. Check it, "
+                "then set the field again")
         if abs(target - current) < 0.5 * resolution:
             raise MagnetFieldError(
                 f"Target {self.target_g:+g} G needs more than the {self.supply}'s ±{self.max_current_a:g} A; "
@@ -5062,21 +5168,27 @@ def magnet_field_reading(pid: MagnetFieldPID, current: float, field: float, scat
     """One step of a field setting, for the page's progress and its end."""
     return dict(current_a=current, field_g=field, scatter_g=scatter, target_g=pid.target_g,
                 tolerance_g=pid.tolerance_g, step=pid.steps, g_per_a=pid.slope_g_per_a,
-                reached=target is None, next_current_a=target)
+                reached=target is None, holding=pid.reached, next_current_a=target)
 
 
 def set_magnet_field(pid: MagnetFieldPID, start_current_a: float, set_current, read_field_g, wait,
-                     progress=None) -> dict[str, object]:
+                     progress=None, hold: bool = False) -> dict[str, object]:
     """Bring the gaussmeter to ``pid``'s target, on a page's worker (user,
     2026-11-14).  From ``start_current_a``, the current the supply is at:
     read the settled field (read_settled_magnet_field), ask ``pid`` for the
     next current, ``set_current(amps)`` it, and so on.
 
     The page supplies the three calls.  ``wait(seconds)`` and
-    ``set_current`` raise the page's stop (a Zero / OFF, the page closing)
-    and that ends it; ``read_field_g()`` returns G.  ``progress(reading)``
-    after every reading.  Returns the last reading once the field is within
-    the tolerance; a MagnetFieldError leaves the current where it is."""
+    ``set_current`` raise the page's stop (Stop hold, a Zero / OFF, the page
+    closing) and that ends it; ``read_field_g()`` returns G.
+    ``progress(reading)`` after every reading.
+
+    Without ``hold`` it returns the reading once the field is within the
+    tolerance.  With it (the pages': user, 2026-11-14, "keep regulating the
+    field after it reaches the target") it never returns: the field is
+    read again every MAGNET_FIELD_HOLD_INTERVAL_S and corrected when it
+    leaves the tolerance, until the stop.  A MagnetFieldError leaves the
+    current where it is."""
     current = float(start_current_a)
     while True:
         field, scatter = read_settled_magnet_field(read_field_g, wait, pid.tolerance_g)
@@ -5085,13 +5197,16 @@ def set_magnet_field(pid: MagnetFieldPID, start_current_a: float, set_current, r
         if progress is not None:
             progress(dict(reading))
         if target is None:
-            return reading
+            if not hold:
+                return reading
+            wait(MAGNET_FIELD_HOLD_INTERVAL_S)
+            continue
         set_current(target)
         current = target
 
 
 def run_magnet_field_set(supply: MagnetSupply, gauss, target_g, tolerance_g, voltage_limit_v, stop_event,
-                         closing=None, progress=None) -> dict[str, object]:
+                         closing=None, progress=None, hold: bool = False) -> dict[str, object]:
     """A page's "Set field" on its worker (user, 2026-11-14): from the
     current the chosen supply is at, set_magnet_field against the LS475.
     (The FMR page's 4886 is stepped from the Tk thread instead, its
@@ -5148,7 +5263,7 @@ def run_magnet_field_set(supply: MagnetSupply, gauss, target_g, tolerance_g, vol
                     raise MagnetFieldError("The KEPCO 4886 output is on in voltage mode: Zero / OFF it first, then "
                                            "set the field; nothing was sent")
                 start = float(kepco.cached_current_a)
-        return set_magnet_field(pid, start, set_current, read_field_g, wait, progress)
+        return set_magnet_field(pid, start, set_current, read_field_g, wait, progress, hold=hold)
     except LakeShoreRampStopped as stopped:
         raise MagnetFieldStopped(str(stopped)) from stopped
 
@@ -5173,6 +5288,20 @@ class _AnyEvent:
 def magnet_field_reading_text(reading: dict) -> str:
     """One reading of a field setting, for a status line."""
     return f"I {float(reading['current_a']):+.4g} A, B {float(reading['field_g']):+.6g} G"
+
+
+# The Set field button's text while a field is being set or held: it ends the
+# regulation and leaves the current (Zero / OFF ends it and zeroes).
+MAGNET_FIELD_SET_BUTTON_TEXT = "Set field"
+MAGNET_FIELD_STOP_BUTTON_TEXT = "Stop hold"
+MAGNET_FIELD_JUST_STOPPED_TEXT = "Field regulation has just stopped: press Set field again to start a new one"
+
+
+def magnet_field_just_stopped(ended_at) -> bool:
+    """True within MAGNET_FIELD_RESTART_LOCKOUT_S of a field setting's end
+    (``ended_at``: time.monotonic() then, or None): a press of its button
+    then starts nothing (review, 2026-11-14)."""
+    return ended_at is not None and time.monotonic() - float(ended_at) < MAGNET_FIELD_RESTART_LOCKOUT_S
 
 
 class STFMRGauss475Controller(SafeVisaIdentityController):
@@ -18439,7 +18568,12 @@ class AutoFocusManager:
             with self.lock:
                 self.running_kind = None
             if not isinstance(error, FocusCancelled):
-                self.app.post_ui(lambda: self._fail(f"Keep in focus stopped: {error}", attrs))
+                # The text now: "error" is gone once this except block ends,
+                # and the callback runs later on the Tk thread, where it
+                # raised NameError instead of reporting (whole-code check,
+                # 2026-11-14).
+                message = f"Keep in focus stopped: {error}"
+                self.app.post_ui(lambda: self._fail(message, attrs))
             return
         if ready is None:
             with self.lock:
@@ -22860,7 +22994,14 @@ class CombinedControlApp:
         # Set field: the same, and the LS475 it is set against (user, 2026-11-14).
         set_field = self.__dict__.get("stfmr_lockin_set_field_button")
         if set_field is not None:
-            set_field.configure(state="normal" if free and self._stfmr_lockin_connected("gauss") else "disabled")
+            if self.__dict__.get("stfmr_lockin_field_setting", False):
+                # While a field is set or held the button ends it and
+                # leaves the current (user, 2026-11-14).
+                set_field.configure(text=MAGNET_FIELD_STOP_BUTTON_TEXT, state="normal")
+            else:
+                set_field.configure(
+                    text=MAGNET_FIELD_SET_BUTTON_TEXT,
+                    state="normal" if free and self._stfmr_lockin_connected("gauss") else "disabled")
 
     def _stfmr_lockin_manual_output_held(self) -> bool:
         """Apply output waits while a stage job of the Motor row (Connect,
@@ -23001,9 +23142,17 @@ class CombinedControlApp:
         job, a Lake Shore job) and needs the safety tick and both
         instruments connected.  While it runs the page's magnet job count is
         up, so Apply output, Start, a hand move and the supply choice wait,
-        and the supply's and the LS475's rows are locked.  Zero / OFF ends
-        it (the sweep's stop event) and zeroes the supply."""
+        and the supply's and the LS475's rows are locked.  Once within the
+        tolerance the field is held there (user, 2026-11-14), until the
+        button, "Stop hold" meanwhile, is pressed again (the current stays)
+        or Zero / OFF (its own stop event and the sweep's; the supply is
+        zeroed)."""
         if self.closing or self.stfmr_lockin_closed:
+            return
+        if self.__dict__.get("stfmr_lockin_field_setting", False):
+            # Stop hold: the regulation ends, the current stays.
+            self.stfmr_lockin_field_stop_event.set()
+            self.stfmr_lockin_status_var.set("Stopping the field regulation…")
             return
         if self.stfmr_lockin_running:
             messagebox.showwarning(
@@ -23017,6 +23166,11 @@ class CombinedControlApp:
                 parent=self.root)
             return
         if self._stfmr_lockin_magnet_jobs_pending():
+            return
+        if magnet_field_just_stopped(self.__dict__.get("stfmr_lockin_field_ended_at")):
+            # The second click of a double-click on Stop hold, or a click on
+            # it just after Zero / OFF: nothing starts.
+            self.stfmr_lockin_status_var.set("Field regulation has just stopped")
             return
         name = self._stfmr_lockin_supply_label()
         if (not self._stfmr_lockin_connected(self._stfmr_lockin_magnet_key())
@@ -23064,6 +23218,7 @@ class CombinedControlApp:
         self.stfmr_lockin_magnet_job_pending = self.__dict__.get("stfmr_lockin_magnet_job_pending", 0) + 1
         self.stfmr_lockin_status_var.set(f"Setting the field to {target:+g} G…")
         self._update_stfmr_lockin_ui()
+        held = []       # the first reading within the tolerance, for the log
 
         def progress(reading) -> None:
             def show() -> None:
@@ -23071,10 +23226,16 @@ class CombinedControlApp:
                 # before the press can run after it).
                 if self.closing or self.stfmr_lockin_closed or stop_event.is_set():
                     return
+                text = magnet_field_reading_text(reading)
                 self.stfmr_lockin_field_var.set(f"B: {float(reading['field_g']):+.7g} G")
+                if reading["reached"] and not held:
+                    held.append(reading)
+                    self.thread_log(f"STFMR field: {target:+g} G ± {tolerance:g} G reached with the {name}: {text}, "
+                                    f"{reading['step']} steps, {float(reading['g_per_a'] or 0.0):.4g} G/A; held "
+                                    "from here")
                 # Within the 52-character status label.
                 self.stfmr_lockin_status_var.set(
-                    f"Field step {reading['step']}: {magnet_field_reading_text(reading)}")
+                    f"Holding: {text}" if reading["holding"] else f"Field step {reading['step']}: {text}")
                 self._show_stfmr_lockin_kepco_state()
             self.post_ui(show)
 
@@ -23082,10 +23243,12 @@ class CombinedControlApp:
             self._stfmr_lockin_require_page_open()
             return run_magnet_field_set(
                 supply, gauss, target, tolerance, limit, stop_event,
-                closing=self._stfmr_lockin_page_closing, progress=progress)
+                closing=self._stfmr_lockin_page_closing, progress=progress, hold=True)
 
-        def ended() -> None:
+        def ended(stopped: bool = False) -> None:
             self.stfmr_lockin_field_setting = False
+            # After a stop only: a retry after an error is a deliberate press.
+            self.stfmr_lockin_field_ended_at = time.monotonic() if stopped else None
             self.stfmr_lockin_magnet_job_pending = max(0, self.stfmr_lockin_magnet_job_pending - 1)
         try:
             future = self.stfmr_lockin_executor.submit(job)
@@ -23097,7 +23260,7 @@ class CombinedControlApp:
             return
 
         def finished() -> None:
-            ended()
+            ended(stopped=isinstance(future.exception(), MagnetFieldStopped))
             if self.closing or self.stfmr_lockin_closed:
                 return
             try:
@@ -23105,19 +23268,19 @@ class CombinedControlApp:
             except MagnetFieldStopped:
                 # A Zero / OFF's own line stays once it has zeroed the supply.
                 if supply.output_on:
-                    self.stfmr_lockin_status_var.set(f"Field setting stopped; {name} left where it was")
+                    self.stfmr_lockin_status_var.set(f"Field regulation stopped; {name} left as it is")
+                    self.thread_log(f"STFMR field: regulation of {target:+g} G stopped; the {name} left where it is")
             except BaseException as error:
-                self.stfmr_lockin_status_var.set(f"Field not set: {short_status_error(error, 36)}")
+                self.stfmr_lockin_status_var.set(
+                    f"Field {'lost' if held else 'not set'}: {short_status_error(error, 36)}")
                 message = (f"{error}\n\nThe {name} is left at its last current; Zero / OFF zeroes it."
                            if supply.output_on else str(error))
-                self.thread_log(f"STFMR field: {target:+g} G not set: {error}")
+                self.thread_log(f"STFMR field: {target:+g} G {'no longer held' if held else 'not set'}: {error}")
                 self._stfmr_lockin_after_drain(lambda: messagebox.showerror("STFMR field", message,
                                                                             parent=self.root))
             else:
-                text = magnet_field_reading_text(reading)
-                self.stfmr_lockin_status_var.set(f"Field set: {text}")
-                self.thread_log(f"STFMR field: {target:+g} G ± {tolerance:g} G set with the {name}: {text}, "
-                                f"{reading['step']} steps, {float(reading['g_per_a'] or 0.0):.4g} G/A")
+                # Not with the hold; kept for a loop that returns.
+                self.stfmr_lockin_status_var.set(f"Field set: {magnet_field_reading_text(reading)}")
             self._update_stfmr_lockin_ui()
             self._show_stfmr_lockin_kepco_state()
 
@@ -28106,10 +28269,16 @@ class CombinedControlApp:
         )
         set_field = self.__dict__.get("stfmr_set_field_button")
         if set_field is not None:
-            # The supply and the LS475 it is set against (user, 2026-11-14).
-            set_field.configure(
-                state="disabled" if busy or not magnet.connected or not self.stfmr_controllers["gauss"].connected
-                else "normal")
+            if self.__dict__.get("stfmr_field_running", False):
+                # While a field is set or held the button ends it and
+                # leaves the current (user, 2026-11-14).
+                set_field.configure(text=MAGNET_FIELD_STOP_BUTTON_TEXT, state="normal")
+            else:
+                # The supply and the LS475 it is set against.
+                set_field.configure(
+                    text=MAGNET_FIELD_SET_BUTTON_TEXT,
+                    state="disabled" if busy or not magnet.connected
+                    or not self.stfmr_controllers["gauss"].connected else "normal")
         choice = self.__dict__.get("stfmr_magnet_choice_combo")
         if choice is not None:
             # Locked while a scan runs or ends, a Lake Shore job is pending,
@@ -29955,10 +30124,26 @@ class CombinedControlApp:
         4886 is written from the Tk thread, as always on this page, and only
         the LS475 is read on the worker.  It needs the safety tick,
         the supply and the LS475 connected and the page idle; the page is
-        busy meanwhile, as during an LS648 ramp.  Zero / OFF ends it and
-        zeroes the supply; a target that cannot be reached leaves the
-        current where the last step put it, and says so."""
-        if self.closing or self.stfmr_closed or self._stfmr_scans_busy() or self._stfmr_magnet_jobs_pending():
+        busy meanwhile, as during an LS648 ramp.  Once within the tolerance
+        the field is held there (user, 2026-11-14: "keep regulating the
+        field after it reaches the target"), until the button, "Stop hold"
+        meanwhile, is pressed again (the current stays) or Zero / OFF (the
+        supply is zeroed).  A target that cannot be reached, or a field
+        that does not answer a step, leaves the current where it is, and
+        says so."""
+        if self.closing or self.stfmr_closed:
+            return
+        if self.__dict__.get("stfmr_field_running", False):
+            # Stop hold: the regulation ends, the current stays.
+            self.stfmr_field_stop_event.set()
+            self.stfmr_status_var.set("Stopping the field regulation…")
+            return
+        if self._stfmr_scans_busy() or self._stfmr_magnet_jobs_pending():
+            return
+        if magnet_field_just_stopped(self.__dict__.get("stfmr_field_ended_at")):
+            # The second click of a double-click on Stop hold, or a click on
+            # it just after Zero / OFF: nothing starts.
+            self.stfmr_status_var.set(MAGNET_FIELD_JUST_STOPPED_TEXT)
             return
         name = self._stfmr_supply_label()
         gauss = self.stfmr_controllers["gauss"]
@@ -29997,9 +30182,11 @@ class CombinedControlApp:
             supply.lakeshore_controller.clear_stop_request()
         self.thread_log(f"FMR field: setting {target:+g} G ± {tolerance:g} G with the {name}")
         self.stfmr_magnet_job_pending = self.__dict__.get("stfmr_magnet_job_pending", 0) + 1
+        self.stfmr_field_running = True
         self.stfmr_status_var.set(f"Setting the field to {target:+g} G…")
         self._set_stfmr_scan_busy(self._stfmr_scans_busy())
         stop_event = self.stfmr_field_stop_event
+        held = []       # the first reading within the tolerance, for the log
 
         def closing() -> bool:
             return bool(self.closing or self.stfmr_closed)
@@ -30009,31 +30196,40 @@ class CombinedControlApp:
             stays (a reading posted before the press can run after it)."""
             if closing() or stop_event.is_set():
                 return
+            text = magnet_field_reading_text(reading)
             self.stfmr_gauss_field_var.set(f"{float(reading['field_g']):+.8g} G")
+            if reading["reached"] and not held:
+                held.append(reading)
+                self.thread_log(f"FMR field: {target:+g} G reached with the {name}: {text}, {reading['step']} steps, "
+                                f"{float(reading['g_per_a'] or 0.0):.4g} G/A; held from here")
             self.stfmr_status_var.set(
-                f"Setting {target:+g} G: step {reading['step']}, {magnet_field_reading_text(reading)}")
+                f"Holding {target:+g} ± {tolerance:g} G: {text}" if reading["holding"]
+                else f"Setting {target:+g} G: step {reading['step']}, {text}")
             self._show_stfmr_field_supply_state()
 
         def finish(reading=None, error=None) -> None:
             """Its end, on the Tk thread, once."""
             self.stfmr_magnet_job_pending = max(0, self.stfmr_magnet_job_pending - 1)
+            self.stfmr_field_running = False
+            # After a stop only: a retry after an error is a deliberate press.
+            self.stfmr_field_ended_at = time.monotonic() if isinstance(error, MagnetFieldStopped) else None
             if closing():
                 return
             if isinstance(error, MagnetFieldStopped):
                 # A Zero / OFF's own line stays once it has zeroed the supply.
                 if supply.output_on:
-                    self.stfmr_status_var.set(f"Field setting stopped; the {name} is left where it was")
+                    self.stfmr_status_var.set(f"Field regulation stopped; the {name} is left at its last current")
+                    self.thread_log(f"FMR field: regulation of {target:+g} G stopped; the {name} left where it is")
             elif error is not None:
-                self.stfmr_status_var.set(f"Field not set: {short_status_error(error, 60)}")
+                self.stfmr_status_var.set(
+                    f"Field {'lost' if held else 'not set'}: {short_status_error(error, 60)}")
                 message = (f"{error}\n\nThe {name} is left at its last current; Zero / OFF zeroes it."
                            if supply.output_on else str(error))
-                self.thread_log(f"FMR field: {target:+g} G not set: {error}")
+                self.thread_log(f"FMR field: {target:+g} G {'no longer held' if held else 'not set'}: {error}")
                 self._stfmr_fmr_after_drain(lambda: messagebox.showerror("FMR field", message, parent=self.root))
             else:
-                text = magnet_field_reading_text(reading)
-                self.stfmr_status_var.set(f"Field set: {text} (target {target:+g} ± {tolerance:g} G)")
-                self.thread_log(f"FMR field: {target:+g} G set with the {name}: {text}, {reading['step']} steps, "
-                                f"{float(reading['g_per_a'] or 0.0):.4g} G/A")
+                # Not with the hold; kept for a loop that returns.
+                self.stfmr_status_var.set(f"Field set: {magnet_field_reading_text(reading)}")
             self._show_stfmr_field_supply_state()
             self._set_stfmr_scan_busy(self._stfmr_scans_busy())
 
@@ -30050,7 +30246,8 @@ class CombinedControlApp:
             try:
                 future = self.stfmr_executor.submit(
                     lambda: run_magnet_field_set(supply, gauss, target, tolerance, None, stop_event, closing=closing,
-                                                 progress=lambda reading: self.post_ui(lambda: show(reading))))
+                                                 progress=lambda reading: self.post_ui(lambda: show(reading)),
+                                                 hold=True))
             except BaseException as error:
                 finish(error=error)
                 return
@@ -30069,9 +30266,13 @@ class CombinedControlApp:
         def read_field_g() -> float:
             return float(STFMRGauss475Controller.value_in_gauss(gauss.read_field()))
 
-        def read() -> None:
+        def read(first_wait_s: float = 0.0) -> None:
+            def settled():
+                if first_wait_s:
+                    wait(first_wait_s)
+                return read_settled_magnet_field(read_field_g, wait, tolerance)
             try:
-                future = self.stfmr_executor.submit(lambda: read_settled_magnet_field(read_field_g, wait, tolerance))
+                future = self.stfmr_executor.submit(settled)
             except BaseException as error:
                 finish(error=error)
                 return
@@ -30090,10 +30291,8 @@ class CombinedControlApp:
             except BaseException as error:
                 finish(error=error)
                 return
-            if following is None:
-                finish(reading=reading)
-                return
-            read()
+            # Within the tolerance: held, read again a little later.
+            read(MAGNET_FIELD_HOLD_INTERVAL_S if following is None else 0.0)
 
         try:
             check()
@@ -56470,6 +56669,14 @@ class RTEPanel(PPMSPanel):
         for widget, state in (self.rte_edit_widgets + self.ppms_lockin_choice_widgets
                               + self.__dict__.get('rte_field_set_widgets', [])):
             widget.configure(state='disabled' if busy else state)
+        set_field = self.__dict__.get('rte_set_field_button')
+        if set_field is not None:
+            # While a field is set or held the button ends it and leaves the
+            # current (user, 2026-11-14); it is then the one input not locked.
+            running = self.__dict__.get('rte_field_setting', False)
+            set_field.configure(text=MAGNET_FIELD_STOP_BUTTON_TEXT if running else MAGNET_FIELD_SET_BUTTON_TEXT,
+                                state='normal' if running and not self.rte_closed
+                                else 'disabled' if busy else 'normal')
         self._rte_paint_red_buttons()
         combo = self.__dict__.get('rte_magnet_choice_combo')
         if combo is not None:
@@ -57195,12 +57402,25 @@ class RTEPanel(PPMSPanel):
         reads the target within the tolerance (run_magnet_field_set), then
         left there.  It needs what Apply needs (the rack's safety tick, the
         rack idle) and both instruments connected; the rack is busy
-        meanwhile.  The Zero / OFF button, never locked, sets the scan's
-        stop event: this ends, and its zero, queued on the same worker, runs
-        next."""
+        meanwhile.  Once within the tolerance the field is held there (user,
+        2026-11-14), until the button, "Stop hold" meanwhile, is pressed
+        again (the current stays) or Zero / OFF.  Both set the scan's stop
+        event; Zero / OFF's zero, queued on the same worker, runs next."""
+        if self.__dict__.get('rte_field_setting', False):
+            # Stop hold: the regulation ends, the current stays.
+            self.ppms_field_scan_stop_event.set()
+            self.rte_drive_live.set('Stopping the field regulation…')
+            return
+        if magnet_field_just_stopped(self.__dict__.get('rte_field_ended_at')):
+            # The second click of a double-click on Stop hold, or a click on
+            # it just after Zero / OFF: nothing starts.
+            self.rte_drive_live.set(MAGNET_FIELD_JUST_STOPPED_TEXT)
+            return
         try:
             self._require_ppms_control_ready()
             name = self._rte_supply_label()
+            if self.__dict__.get('rte_lakeshore_zero_pending', 0) > 0:
+                raise RuntimeError(f'The {name} is being ramped to 0 A (Zero / OFF): wait for it, then set the field')
             limit = self._rte_voltage_limit()
             if self._rte_lakeshore_chosen():
                 self._rte_rate()
@@ -57224,14 +57444,23 @@ class RTEPanel(PPMSPanel):
             supply.lakeshore_controller.clear_stop_request()
         self.thread_log(f'SHV field: setting {target:+g} G ± {tolerance:g} G with the {name}')
         self.rte_drive_live.set(f'Setting the field to {target:+g} G…')
+        self.rte_field_setting = True
+        held = []       # the first reading within the tolerance, for the log
 
         def progress(reading):
             def show():
                 # Not after a Zero / OFF: its line stays.
                 if self.rte_closed or self.closing or self.ppms_field_scan_stop_event.is_set():
                     return
+                text = magnet_field_reading_text(reading)
                 self.rte_field_live.set(f"LS475 field: {float(reading['field_g']):+.7g} G")
-                self.rte_drive_live.set(f"Field step {reading['step']}: {magnet_field_reading_text(reading)}")
+                if reading['reached'] and not held:
+                    held.append(reading)
+                    self.thread_log(f"SHV field: {target:+g} G ± {tolerance:g} G reached with the {name}: {text}, "
+                                    f"{reading['step']} steps, {float(reading['g_per_a'] or 0.0):.4g} G/A; held "
+                                    'from here')
+                self.rte_drive_live.set(f'Holding: {text}' if reading['holding']
+                                        else f"Field step {reading['step']}: {text}")
             self.post_ui(show)
 
         def work():
@@ -57240,29 +57469,38 @@ class RTEPanel(PPMSPanel):
             try:
                 return run_magnet_field_set(
                     supply, gauss, target, tolerance, limit, self.ppms_field_scan_stop_event,
-                    closing=lambda: self.closing or self.rte_closed, progress=progress)
+                    closing=lambda: self.closing or self.rte_closed, progress=progress, hold=True)
             except Exception as error:
                 return error
 
         def done(result):
+            # On the Tk thread, before the rack's controls are set again:
+            # the button is "Set field" once more, and starts nothing for a
+            # moment (review, 2026-11-14).
+            self.rte_field_setting = False
+            # After a stop only: a retry after an error is a deliberate press.
+            self.rte_field_ended_at = time.monotonic() if isinstance(result, MagnetFieldStopped) else None
             if supply.lakeshore:
                 controller = supply.lakeshore_controller
                 self.rte_connections['lakeshore'].set(lakeshore_state_word(controller.reading, controller.arm_problem))
             if isinstance(result, MagnetFieldStopped):
                 # A Zero / OFF's own line follows once it has zeroed the supply.
-                self.rte_drive_live.set(f'{name}: field setting stopped')
+                self.rte_drive_live.set(f'{name}: field regulation stopped')
+                self.thread_log(f'SHV field: regulation of {target:+g} G stopped')
                 return
             if isinstance(result, BaseException):
-                self.rte_drive_live.set(f'Field not set: {short_status_error(result, 60)}')
-                self.thread_log(f'SHV field: {target:+g} G not set: {result}')
+                self.rte_drive_live.set(f"Field {'lost' if held else 'not set'}: {short_status_error(result, 60)}")
+                self.thread_log(f"SHV field: {target:+g} G {'no longer held' if held else 'not set'}: {result}")
                 self._rte_dialog('SHV field', f'{result}\n\nThe {name} is left at its last current; its Zero / OFF '
                                               'zeroes it.' if supply.output_on else str(result))
                 return
-            text = magnet_field_reading_text(result)
-            self.rte_drive_live.set(f'Field set: {text}')
-            self.thread_log(f"SHV field: {target:+g} G ± {tolerance:g} G set with the {name}: {text}, "
-                            f"{result['step']} steps, {float(result['g_per_a'] or 0.0):.4g} G/A")
-        self._rte_submit(work, done)
+            # Not with the hold; kept for a loop that returns.
+            self.rte_drive_live.set(f'Field set: {magnet_field_reading_text(result)}')
+        try:
+            self._rte_submit(work, done)
+        finally:
+            if not self.ppms_environment_busy:
+                self.rte_field_setting = False      # not submitted
 
     def _rte_zero(self):
         self.ppms_field_scan_stop_event.set()
@@ -57277,8 +57515,13 @@ class RTEPanel(PPMSPanel):
                 supply = self._rte_supply()
                 supply.lakeshore_controller.request_stop()
                 future = self.ppms_executor.submit(supply.zero)
+                # Counted until it ends: Set field waits for it (review,
+                # 2026-11-14: a press during the ramp to 0 A queued a field
+                # setting behind it, and the magnet came back up).
+                self.rte_lakeshore_zero_pending = self.__dict__.get('rte_lakeshore_zero_pending', 0) + 1
 
                 def zeroed():
+                    self.rte_lakeshore_zero_pending = max(0, self.__dict__.get('rte_lakeshore_zero_pending', 0) - 1)
                     try:
                         future.result()
                         self.rte_drive_live.set(f'{supply.label}: at 0 A (zeroed)')

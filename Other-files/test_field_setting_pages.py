@@ -3,8 +3,10 @@
 can try to use PID to control the magnetic field value").
 
 Each page steps its chosen magnet supply (the KEPCO 4886 or its Lake Shore)
-on its worker until the LS475 reads the target within the tolerance, then
-leaves the current there (test_magnet_field_set.py has the controller).
+until the LS475 reads the target within the tolerance, then keeps it there
+(user, the same day: "keep regulating the field after it reaches the
+target") until its button, "Stop hold" meanwhile, is pressed again (the
+current stays) or Zero / OFF (test_magnet_field_set.py has the controller).
 Here, per page:
 
 - it needs the safety confirmation, the supply and the LS475 connected and
@@ -38,12 +40,42 @@ stfmr_app = ls_pages.stfmr_app
 Variable = ls_pages.Variable
 
 
+def stop_once_held(gauss, target, tolerance, press, readings=14):
+    """Press the page's Stop hold after ``readings`` LS475 readings within
+    the tolerance: the field was reached (a settled reading is two groups
+    of three) and then read again while held."""
+    read, inside, reads = gauss.read_field, [0], [0]
+
+    def reading():
+        reads[0] += 1
+        if reads[0] > 3000:
+            raise AssertionError("the hold did not end")       # a failure, never a hang
+        result = read()
+        if abs(app.STFMRGauss475Controller.value_in_gauss(result) - target) <= tolerance:
+            inside[0] += 1
+            if inside[0] == readings:
+                press()
+        return result
+    gauss.read_field = reading
+    return inside
+
+
 def setUpModule():
     # The SHV page's guards: no real DLL, no window.
     shv_runs.setUpModule()
+    # A second Set field right after one ended is these tests' own; the
+    # wait a press needs after an end has its tests below.
+    for program in {id(module): module for module in (app, stfmr_app)}.values():
+        _patches.append(mock.patch.object(program, "MAGNET_FIELD_RESTART_LOCKOUT_S", 0.0))
+        _patches[-1].start()
+
+
+_patches = []
 
 
 def tearDownModule():
+    while _patches:
+        _patches.pop().stop()
     shv_runs.tearDownModule()
 
 
@@ -57,6 +89,11 @@ class FmrFieldTests(fmr_runs.FmrRun):
         a.stfmr_output_mode_var, a.stfmr_output_limit_var = Var("Current"), Var("5")
         a.busy_calls = []
         a._set_stfmr_scan_busy = lambda busy: a.busy_calls.append((busy, a.stfmr_magnet_job_pending))
+        a.statuses = []
+        show = a.stfmr_status_var.set
+        a.stfmr_status_var.set = lambda text: (a.statuses.append(text), show(text))[1]
+        # Held once reached: the page's button, pressed again, ends it.
+        a.held = stop_once_held(a.stfmr_controllers["gauss"], float(target), float(tolerance), a.set_stfmr_field)
         return a
 
     def writes(self, a):
@@ -71,9 +108,13 @@ class FmrFieldTests(fmr_runs.FmrRun):
                                       "OUTP ON", "CURR 0.000000"])
         self.assertTrue(all(write.startswith("CURR ") for write in writes[5:]))
         self.assertLessEqual(abs(300.0 * a.card.current - 500.0), 1.0)
-        status = a.stfmr_status_var.get()
-        self.assertTrue(status.startswith("Field set: I +1.6"), status)
-        self.assertTrue(status.endswith("(target +500 ± 1 G)"), status)
+        # Reached, then held (read again, nothing to correct) until Stop hold.
+        holding = [text for text in a.statuses if text.startswith("Holding +500 ± 1 G: I +1.6")]
+        self.assertGreaterEqual(len(holding), 2, a.statuses)
+        self.assertEqual(a.statuses[-2:], ["Stopping the field regulation…",
+                                           "Field regulation stopped; the 4886 is left at its last current"])
+        self.assertEqual(writes[-1], f"CURR {a.card.current:.6f}", "the current stays where it held the field")
+        self.assertFalse(a.stfmr_field_running)
         # The page was busy while it ran (the job counted) and is free again.
         self.assertEqual(a.busy_calls[0], (False, 1))
         self.assertEqual(a.busy_calls[-1], (False, 0))
@@ -83,6 +124,104 @@ class FmrFieldTests(fmr_runs.FmrRun):
         self.assertEqual(review.readout(a)[3], "OUTP: ON")
         self.assertTrue(a.stfmr_gauss_field_var.get().endswith(" G"))
         self.assertIn(("log", "FMR field: setting +500 G ± 1 G with the 4886"), a.log)
+        logged = [text for kind, text in a.log if kind == "log"]
+        self.assertTrue(any(text.startswith("FMR field: +500 G reached with the 4886: I +1.6")
+                            and text.endswith("held from here") for text in logged), logged)
+        self.assertEqual(logged[-1], "FMR field: regulation of +500 G stopped; the 4886 left where it is")
+
+    def test_a_field_that_drifts_while_held_is_brought_back(self):
+        a = self.page(target="500", tolerance="1")
+        gauss = a.stfmr_controllers["gauss"]
+        a.held[0] = -10 ** 6                    # not stopped by the page's own hook
+        read, state = gauss.read_field, {"reads": 0, "drift": 0.0, "worst": 0.0}
+
+        def reading():
+            result = read()
+            state["reads"] += 1
+            if state["drift"] or abs(result["field"] - 500.0) <= 1.0:
+                state["drift"] -= 0.1           # the magnet warms: the field sags, slowly
+            result["field"] += state["drift"]
+            if state["drift"] < -4.0:
+                state["worst"] = max(state["worst"], abs(result["field"] - 500.0))
+            if state["drift"] < -20.0 and a.stfmr_field_running:
+                a.set_stfmr_field()             # Stop hold
+            return result
+        gauss.read_field = reading
+        a.set_stfmr_field()
+        self.error.assert_not_called()
+        self.assertEqual(a.statuses[-1], "Field regulation stopped; the 4886 is left at its last current")
+        # 20 G of drift made up by the current, the field never far off, and
+        # no "the field did not respond" from the drift.
+        self.assertGreater(300.0 * a.card.current, 500.0 + 15.0)
+        self.assertLess(state["worst"], 3.0)
+
+    def test_a_second_click_on_stop_hold_or_a_click_after_zero_off_starts_nothing(self):
+        """The button is "Set field" again a moment after the first click or
+        the Zero / OFF: the next click used to start a new field setting,
+        after a Zero / OFF switching the magnet back on (review, 2026-11-14)."""
+        with mock.patch.object(app, "MAGNET_FIELD_RESTART_LOCKOUT_S", 2.0):
+            a = self.page()
+            a.set_stfmr_field()                 # held, then stopped by the page's hook
+            writes = list(self.writes(a))
+            a.set_stfmr_field()                 # the double-click's second click
+            self.assertEqual(self.writes(a), writes)
+            self.assertEqual(a.statuses[-1], app.MAGNET_FIELD_JUST_STOPPED_TEXT)
+            self.assertFalse(a.stfmr_field_running)
+            # Zero / OFF, then a click on what was "Stop hold".
+            b = self.page(target="2500")
+            gauss = b.stfmr_controllers["gauss"]
+            read = gauss.read_field
+            gauss.read_field = lambda: (b.zero_stfmr_kepco_output() if len(self.writes(b)) >= 8
+                                        and not b.stfmr_field_stop_event.is_set() else None, read())[1]
+            b.set_stfmr_field()
+            self.assertEqual(self.writes(b)[-1], "OUTP OFF")
+            b.set_stfmr_field()
+            self.assertEqual(self.writes(b)[-1], "OUTP OFF", "the magnet stays off")
+            self.assertFalse(b.stfmr_controllers["kepco"].output_owned)
+            # After an error a retry is a deliberate press: not held back.
+            c = self.page(target="9000")
+            c.set_stfmr_field()
+            self.assertTrue(c.statuses[-1].startswith("Field not set: Target +9000 G"), c.statuses[-1])
+            writes = len(self.writes(c))
+            c.stfmr_field_target_var.set("300")
+            stop_once_held(c.stfmr_controllers["gauss"], 300.0, 1.0, c.set_stfmr_field)
+            c.set_stfmr_field()
+            self.assertGreater(len(self.writes(c)), writes)
+            self.assertLessEqual(abs(300.0 * c.card.current - 300.0), 1.0)
+            # Later it is a Set field again.
+            b.stfmr_field_ended_at -= 5.0
+            gauss.read_field = read
+            b.stfmr_field_target_var.set("300")
+            stop_once_held(gauss, 300.0, 1.0, b.set_stfmr_field)
+            b.set_stfmr_field()
+            self.assertLessEqual(abs(300.0 * b.card.current - 300.0), 1.0)
+
+    def test_a_gaussmeter_that_fails_while_the_field_is_held_leaves_the_current_and_says_so(self):
+        """User, 2026-11-14: "when the current increase while the field not
+        respond stop increasing the current and return that the Gauss meter
+        may not work"."""
+        a = self.page(target="500", tolerance="1")
+        gauss = a.stfmr_controllers["gauss"]
+        a.held[0] = -10 ** 6
+        read, inside = gauss.read_field, [0]
+
+        def reading():
+            result = read()
+            inside[0] += 1 if abs(result["field"] - 500.0) <= 1.0 else 0
+            if inside[0] >= 14:
+                result["field"] = 0.0           # the meter dies: it reads 0 G whatever the current
+            return result
+        gauss.read_field = reading
+        a.set_stfmr_field()
+        self.assertLessEqual(abs(300.0 * a.card.current - 500.0), 1.0, "the current is where it held the field")
+        self.assertTrue(a.statuses[-1].startswith("Field lost: The field reading changed by -499"), a.statuses[-1])
+        a.root.run(lambda: False)
+        text = self.error.call_args.args[1]
+        self.assertIn("while the KEPCO current stayed at", text)
+        self.assertIn("The current is not changed. The gaussmeter may not be working", text)
+        self.assertTrue(text.endswith("The 4886 is left at its last current; Zero / OFF zeroes it."), text)
+        self.assertEqual(a.stfmr_magnet_job_pending, 0)
+        self.assertFalse(a.stfmr_field_running)
 
     def test_the_4886_is_written_from_the_tk_thread_and_only_the_475_read_on_the_worker(self):
         """This page's rule for its 4886 session (connect_stfmr_device): a
@@ -97,6 +236,7 @@ class FmrFieldTests(fmr_runs.FmrRun):
         a.set_stfmr_field()
         self.error.assert_not_called()
         self.assertLessEqual(abs(300.0 * a.card.current - 500.0), 1.0)
+        self.assertGreaterEqual(a.held[0], 14, "also while it was held")
         self.assertEqual(threads["4886"], {threading.get_ident()})
         self.assertEqual(threads["475"], {a.stfmr_executor.ident})
         self.assertEqual(a.stfmr_magnet_job_pending, 0)
@@ -158,6 +298,7 @@ class FmrFieldTests(fmr_runs.FmrRun):
         # The next Set field is not ended by that old Zero.
         gauss.read_field = read
         a.stfmr_field_target_var.set("300")
+        stop_once_held(gauss, 300.0, 1.0, a.set_stfmr_field)
         a.set_stfmr_field()
         self.assertLessEqual(abs(300.0 * a.card.current - 300.0), 1.0)
 
@@ -196,6 +337,7 @@ class FmrFieldTests(fmr_runs.FmrRun):
         a.stfmr_magnet_rate_var = Var("5")
         a.stfmr_controllers["gauss"] = Gauss(lambda: 120.0 * fake.current + 3.0)
         a.stfmr_controllers["gauss"].connected = True
+        a.held = stop_once_held(a.stfmr_controllers["gauss"], float(target), 1.0, a.set_stfmr_field)
         return a, controller, fake
 
     def setpoints(self, fake):
@@ -208,7 +350,10 @@ class FmrFieldTests(fmr_runs.FmrRun):
         self.assertLessEqual(abs(120.0 * fake.current + 3.0 - 2400.0), 1.0)
         self.assertEqual(self.setpoints(fake)[0], 0.02)
         self.assertEqual(self.writes(a), [], "the 4886 is not touched")
-        self.assertTrue(a.stfmr_status_var.get().startswith("Field set: I +19.9"), a.stfmr_status_var.get())
+        self.assertTrue(any(text.startswith("Holding +2400 ± 1 G: I +19.9") for text in a.statuses), a.statuses)
+        self.assertEqual(a.statuses[-1], "Field regulation stopped; the LS648 is left at its last current")
+        self.assertEqual(self.setpoints(fake)[-1], round(fake.current, 3), "no setpoint after Stop hold")
+        self.assertTrue(controller.output_on)
         self.assertEqual(a.stfmr_magnet_job_pending, 0)
         self.assertEqual(a.stfmr_magnet_rate_a_s, 5.0, "the Rate A/s box")
         self.assertIn(("log", "FMR field: setting +2400 G ± 1 G with the LS648"), a.log)
@@ -254,6 +399,8 @@ class StfmrFieldTests(ls_pages.NoWindows):
         h.stfmr_lockin_manual_mode_var, h.stfmr_lockin_manual_limit_var = Variable("Current"), Variable("5")
         h.logged = []
         h.thread_log = h.logged.append
+        # Held once reached: the page's button, pressed again, ends it.
+        h.held = stop_once_held(gauss, float(target), float(tolerance), h.set_stfmr_lockin_field)
         return h
 
     def test_the_kepco_is_stepped_until_the_475_reads_the_target(self):
@@ -271,16 +418,19 @@ class StfmrFieldTests(ls_pages.NoWindows):
         self.assertEqual(self.card.writes[:5], ["FUNC:MODE CURR", "CURR 0;VOLT 5",
                                                 "VOLT:RANG:AUTO 1;CURR:RANG:AUTO 1", "OUTP ON", "CURR 0.000000"])
         self.assertLessEqual(abs(300.0 * self.card.current + 5.0 - 500.0), 1.0)
+        self.assertGreaterEqual(h.held[0], 14, "read on while it was held")
+        self.assertEqual(self.card.writes[-1], f"CURR {self.card.current:.6f}", "the current stays")
         status = h.stfmr_lockin_status_var.get()
-        self.assertTrue(status.startswith("Field set: I +1.6"), status)
+        self.assertEqual(status, "Field regulation stopped; 4886 left as it is")
         self.assertLessEqual(len(status), 52, "within the page's status label")
+        self.assertTrue(h.stfmr_lockin_controllers["kepco"].output_owned)
         # Apply output, Start, a hand move and the supply choice waited, and
         # the two rows were locked, while it ran; all free again.
         self.assertEqual(set(during), {(True, True)})
         self.assertFalse(h.stfmr_lockin_field_setting)
         self.assertFalse(h._stfmr_lockin_magnet_jobs_pending())
-        self.assertTrue(h.stfmr_lockin_field_var.get().startswith("B: +"))
         self.assertEqual(h.logged[0], "STFMR field: setting +500 G ± 1 G with the 4886")
+        self.assertEqual(h.logged[-1], "STFMR field: regulation of +500 G stopped; the 4886 left where it is")
 
     def test_it_waits_as_apply_output_does_and_needs_the_tick_and_both_instruments(self):
         h = self.page()
@@ -394,6 +544,18 @@ class StfmrFieldTests(ls_pages.NoWindows):
         self.assertEqual(self.card.writes, zeroed, "nothing after the Zero / OFF")
         self.assertFalse(h.stfmr_lockin_controllers["kepco"].output_owned)
 
+    def test_a_second_click_on_stop_hold_starts_nothing(self):
+        with mock.patch.object(stfmr_app, "MAGNET_FIELD_RESTART_LOCKOUT_S", 2.0):
+            h = self.page()
+            h.set_stfmr_lockin_field()
+            h.root.drain()
+            writes = list(self.card.writes)
+            h.set_stfmr_lockin_field()          # the double-click's second click
+            h.root.drain()
+            self.assertEqual(self.card.writes, writes)
+            self.assertEqual(h.stfmr_lockin_status_var.get(), "Field regulation has just stopped")
+            self.assertFalse(h._stfmr_lockin_magnet_jobs_pending())
+
     def test_a_target_out_of_reach_leaves_the_current_and_says_so(self):
         h = self.page(target="9000")
         h.set_stfmr_lockin_field()
@@ -417,12 +579,13 @@ class StfmrFieldTests(ls_pages.NoWindows):
         gauss = Gauss(lambda: 120.0 * fake.current + 3.0)
         gauss.connected = True
         h.stfmr_lockin_controllers["gauss"] = gauss
+        stop_once_held(gauss, 2400.0, 1.0, h.set_stfmr_lockin_field)
         h.set_stfmr_lockin_field()
         h.root.drain()
         self.error.assert_not_called()
         self.assertLessEqual(abs(120.0 * fake.current + 3.0 - 2400.0), 1.0)
         self.assertEqual(self.card.writes, [], "the 4886 is not touched")
-        self.assertTrue(h.stfmr_lockin_status_var.get().startswith("Field set: I +19.9"))
+        self.assertEqual(h.stfmr_lockin_status_var.get(), "Field regulation stopped; LS643 left as it is")
         self.assertTrue(controller.output_on, "a hand move of the stage is refused until it is zeroed")
         # Zero / OFF during the next one: no setpoint but the zero's follows.
         read = gauss.read_field
@@ -455,6 +618,8 @@ class ShvFieldTests(shv_runs.EndToEnd):
         panel.ppms_field_scan_stop_event = Instant()
         panel.rte_field_target.set(target)
         panel.rte_field_tolerance.set(tolerance)
+        # Held once reached: the page's button, pressed again, ends it.
+        h.held = stop_once_held(gauss, float(target), float(tolerance), panel._rte_set_field)
         return h
 
     def test_the_kepco_is_stepped_on_the_worker_until_the_475_reads_the_target(self):
@@ -472,8 +637,11 @@ class ShvFieldTests(shv_runs.EndToEnd):
         self.assertEqual(self.card.writes[:5], ["FUNC:MODE CURR", "CURR 0;VOLT 5",
                                                 "VOLT:RANG:AUTO 1;CURR:RANG:AUTO 1", "OUTP ON", "CURR 0.000000"])
         self.assertLessEqual(abs(300.0 * self.card.current + 5.0 - 500.0), 1.0)
-        self.assertTrue(panel.rte_drive_live.get().startswith("Field set: I +1.6"), panel.rte_drive_live.get())
-        self.assertTrue(panel.rte_field_live.get().startswith("LS475 field: +"), panel.rte_field_live.get())
+        self.assertGreaterEqual(h.held[0], 14, "read on while it was held")
+        self.assertEqual(self.card.writes[-1], f"CURR {self.card.current:.6f}", "the current stays")
+        self.assertEqual(panel.rte_drive_live.get(), "KEPCO: field regulation stopped")
+        self.assertFalse(panel.rte_field_setting)
+        self.assertEqual(h.logged[-1], "SHV field: regulation of +500 G stopped")
         self.assertEqual(set(during), {(True, h.worker)}, "on the worker, the rack busy meanwhile")
         self.assertFalse(panel.ppms_environment_busy)
         self.assertIn("SHV field: setting +500 G ± 1 G with the KEPCO", h.logged)
@@ -516,6 +684,47 @@ class ShvFieldTests(shv_runs.EndToEnd):
         self.assertEqual(self.card.writes[-2:], ["CURR 0.000000", "OUTP OFF"])
         self.assertEqual(panel.rte_drive_live.get(), "KEPCO: zeroed and output OFF")
         self.assertFalse(panel.ppms_environment_busy)
+
+    def test_set_field_waits_for_the_ls643s_zero_off_ramp(self):
+        """A press during the ramp to 0 A, the button long "Set field"
+        again, queued a field setting behind it and the magnet came back up
+        (review, 2026-11-14)."""
+        h = self.page(target="2400")
+        panel = h.panel
+        controller, fake, _clock = connected_supply("643", owner="SHV", current=20.0)
+        self.addCleanup(app._INSTRUMENT_LEASES.clear)
+        panel.rte_controllers["lakeshore"] = controller
+        panel.rte_magnet_rate.set("5")
+        panel.rte_magnet_choice_var.set("Lake Shore 643")
+        panel._rte_magnet_choice_changed()
+        gate = threading.Event()
+        h.executor.submit(gate.wait, 30)        # the worker is busy: the zero stays queued behind it
+        panel._rte_zero()
+        self.assertEqual(panel.rte_lakeshore_zero_pending, 1)
+        panel._rte_set_field()
+        self.assertEqual(h.showerror.call_args.args[:2],
+                         ("SHV field", "The LS643 is being ramped to 0 A (Zero / OFF): wait for it, then set the "
+                                       "field"))
+        gate.set()
+        self.pump(h)
+        self.assertEqual(panel.rte_lakeshore_zero_pending, 0)
+        self.assertLessEqual(abs(fake.current), 0.05)
+        self.assertEqual(fake.sent()[-1], "SETI 0.000", "the zero, and no field setting behind it")
+
+    def test_a_second_click_on_stop_hold_starts_nothing(self):
+        with mock.patch.object(app, "MAGNET_FIELD_RESTART_LOCKOUT_S", 2.0):
+            h = self.page()
+            panel = h.panel
+            panel._rte_set_field()
+            self.pump(h)
+            writes = list(self.card.writes)
+            self.assertEqual(panel.rte_drive_live.get(), "KEPCO: field regulation stopped")
+            panel._rte_set_field()              # the double-click's second click
+            self.pump(h)
+            self.assertEqual(self.card.writes, writes)
+            self.assertEqual(panel.rte_drive_live.get(), app.MAGNET_FIELD_JUST_STOPPED_TEXT)
+            h.showerror.assert_not_called()
+            self.assertFalse(panel.ppms_environment_busy)
 
     def test_a_zero_off_from_the_tk_thread_while_the_worker_reads(self):
         h = self.page(target="2500")
@@ -566,12 +775,13 @@ class ShvFieldTests(shv_runs.EndToEnd):
         gauss = Gauss(lambda: 120.0 * fake.current + 3.0)
         gauss.connected = True
         panel.rte_controllers["gauss"] = gauss
+        stop_once_held(gauss, 2400.0, 1.0, panel._rte_set_field)
         panel._rte_set_field()
         self.pump(h)
         h.showerror.assert_not_called()
         self.assertLessEqual(abs(120.0 * fake.current + 3.0 - 2400.0), 1.0)
         self.assertEqual(self.card.writes, [], "the KEPCO is not touched")
-        self.assertTrue(panel.rte_drive_live.get().startswith("Field set: I +19.9"), panel.rte_drive_live.get())
+        self.assertEqual(panel.rte_drive_live.get(), "LS643: field regulation stopped")
         self.assertEqual(fake.page_threads(), {h.worker})
 
 

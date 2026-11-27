@@ -48,7 +48,7 @@ beside this one.
 
 ## What is in the window
 
-The first five tabs are the measurements; each offers its own scans in the
+The first six tabs are the measurements; each offers its own scans in the
 Scan box (user, 2026-11-27):
 
 | Tab | Scans |
@@ -58,6 +58,7 @@ Scan box (user, 2026-11-27):
 | **NLH** | Current |
 | **SHHV** | Angle+Field, Angle+Current |
 | **Switch-OOP** | Switch, Switch-loop, Switch2 |
+| **Switch-IP** | Switch, Switch-loop, Switch2 |
 
 - They are one page: the instruments stay connected, and the settings stay as
   they are, when another measurement's tab is chosen. Only the list of scans
@@ -68,6 +69,12 @@ Scan box (user, 2026-11-27):
   harmonic. The read current and the SR830-1 harmonic go back to 1.5 mA and
   2 in the other tabs; either box keeps a value that was typed into it. The
   safety tick is never set by the program.
+- **Switch-IP** is Switch-OOP with three values of its own: Switch-loop from
+  14 to -14 mA in 2 mA steps and back, 30 µs pulses, SR830-1 on the 2nd
+  harmonic. The rest is Switch-OOP's (200 G, 0.5 mA RMS read current, Settle s
+  30, Acquire s 30). Between the two tabs the loop, the pulse width and the
+  harmonic follow the tab; a typed value stays. Pulse µs shows 1000 in the
+  other tabs.
 - **PHE** opens as the user's second figure of 2026-11-27: Angle+Field from 0
   to -360° in 5° steps, 1 loop, Settle s 0.5, Acquire s 5, no round trip,
   outer field 200 G (one field), read current 1.5 mA RMS, SR830-1 on the 1st
@@ -83,9 +90,9 @@ Scan box (user, 2026-11-27):
 - Everything else is the SHHV & Switch page of Transport-all: Set field, the
   stage controls, the pulse row, the files, run logs and start questions. The
   saved rows and the run's settings have one more entry, `measurement` (PHE,
-  AHE, NLH, SHHV or Switch-OOP); the `module` column still says SHHV.
+  AHE, NLH, SHHV, Switch-OOP or Switch-IP); the `module` column still says SHHV.
 - A run whose file name is left blank is named after its measurement:
-  `PHE_<date>_<time>`, `AHE_…`, `NLH_…`, `SHHV_…`, `Switch-OOP_…` (the run
+  `PHE_<date>_<time>`, `AHE_…`, `NLH_…`, `SHHV_…`, `Switch-OOP_…`, `Switch-IP_…` (the run
   folder, its `.csv` and its `.log`). Save CSV as suggests the same name. A
   typed name is used as typed.
 - In a wide window three things take one row instead of two: the scan note

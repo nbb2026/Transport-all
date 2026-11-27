@@ -8,7 +8,7 @@ never talks to instruments.
     python Other-files/ci/rt_checks.py --shots DIR
 
 For each emulated lab screen it builds the whole application at 96 DPI,
-checks that the window is this program (its title and its tabs: the five
+checks that the window is this program (its title and its tabs: the six
 measurements, then Log), that choosing a measurement's tab brings the page
 there with that measurement's scans, and reports any widget that sticks out
 past the page and any label, button or Zurich list entry whose text does not
@@ -42,6 +42,7 @@ MEASUREMENTS = {  # user, 2026-11-27: the tabs in this order, each with these sc
     'NLH': ('Current',),
     'SHHV': ('Angle+Field', 'Angle+Current'),
     'Switch-OOP': ('Switch', 'Switch-loop', 'Switch2'),
+    'Switch-IP': ('Switch', 'Switch-loop', 'Switch2'),
 }
 PAGES = (*MEASUREMENTS, 'Log')
 

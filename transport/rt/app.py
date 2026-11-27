@@ -1906,10 +1906,12 @@ RTE_MEASUREMENTS = {
     "NLH": ("Current",),
     "SHHV": ("Angle+Field", "Angle+Current"),
     "Switch-OOP": ("Switch", "Switch-loop", "Switch2"),
+    "Switch-IP": ("Switch", "Switch-loop", "Switch2"),
 }
 RTE_MEASUREMENT_START = {
     "PHE": dict(scan="Angle+Field", harmonic_a="1", angle_field_g="200"),
     "Switch-OOP": dict(scan="Switch-loop", current_ma="0.5", harmonic_a="1"),
+    "Switch-IP": dict(scan="Switch-loop", current_ma="0.5", harmonic_a="2", loop_range=("14", "-14", "2"), pulse_width_us="30"),
 }
 RTE_DEFAULT_MEASUREMENT = "SHHV"
 RTE_SCAN_BOX_FIRST = True
@@ -14563,6 +14565,11 @@ class RTEPanel(PPMSPanel):
         if scan != self.ppms_simple_mode.get():
             self.ppms_simple_mode.set(scan)
             self._rte_mode_changed()
+        elif scan == SWITCH_LOOP_SCAN_MODE:
+            old, new = (tuple(RTE_MEASUREMENT_START.get(n, {}).get('loop_range') or SWITCH_LOOP_DEFAULT_RANGE) for n in (was, name))
+            if old != new and tuple(str(v.get()).strip() for v in self.ppms_simple_range) == old:
+                for variable, value in zip(self.ppms_simple_range, new):
+                    variable.set(value)
         frame = state.get('ppms_plot_frame')
         if frame is not None:
             frame.configure(text=f'{name}: {RTE_PLOT_TITLE_TAIL}')
@@ -14572,7 +14579,7 @@ class RTEPanel(PPMSPanel):
         state = self.__dict__
         shown = state.setdefault('rte_measurement_shown', {})
         fields = (state.get('rte_outer_ranges') or {}).get('Angle+Field') or [None]
-        for key, variable, base in (('current_ma', state.get('ppms_transport_current_var'), f'{RTE_TRANSPORT_CURRENT_RMS_MA:g}'), ('harmonic_a', state.get('ppms_transport_harmonic_a_var'), '2'), ('angle_field_g', fields[0], RTE_OUTER_ROWS['Angle+Field']['defaults'][0])):
+        for key, variable, base in (('current_ma', state.get('ppms_transport_current_var'), f'{RTE_TRANSPORT_CURRENT_RMS_MA:g}'), ('harmonic_a', state.get('ppms_transport_harmonic_a_var'), '2'), ('pulse_width_us', state.get('rte_pulse_width_us'), f'{SWITCH_DEFAULT_PULSE_WIDTH_US:g}'), ('angle_field_g', fields[0], RTE_OUTER_ROWS['Angle+Field']['defaults'][0])):
             new, was = str(start.get(key, base)), shown.get(key, base)
             if variable is None or new == was or str(variable.get()).strip() != was:
                 continue
@@ -14586,7 +14593,7 @@ class RTEPanel(PPMSPanel):
         angle = mode in RTE_ANGLE_MODES
         switch = mode in SWITCH_MODES
         self.rte_round_trip.set(mode in (*RTE_FIELD_SWEEP_MODES, SWITCH_LOOP_SCAN_MODE, SWITCH2_SCAN_MODE))
-        defaults = ('0.01', '1', '0.01') if current else RTE_ANGLE_DEFAULT_RANGE if angle else SWITCH_LOOP_DEFAULT_RANGE if mode == SWITCH_LOOP_SCAN_MODE else () if switch else RTE_FIELD_DEFAULT_RANGE
+        defaults = ('0.01', '1', '0.01') if current else RTE_ANGLE_DEFAULT_RANGE if angle else (RTE_MEASUREMENT_START.get(self.__dict__.get('rte_measurement'), {}).get('loop_range') or SWITCH_LOOP_DEFAULT_RANGE) if mode == SWITCH_LOOP_SCAN_MODE else () if switch else RTE_FIELD_DEFAULT_RANGE
         for variable, value in zip(self.ppms_simple_range, defaults):
             variable.set(value)
         acquire = self.__dict__.get('ppms_acquisition_time_var')

@@ -1,4 +1,4 @@
-"""The five measurements of Transport_RT (user, 2026-11-27: "split SHHV and
+"""The measurements of Transport_RT (user, 2026-11-27: "split SHHV and
 Switch to two modes. also add modes named NLH, AHE, PHE. In the order: PHE,
 AHE, NLH, SHHV, Switch pls. PHE-scan: angle+field, angle+current; AHE-scan:
 field, field+angle, field+current; NLH-scan: current; SHHV-scan: angle+field,
@@ -31,13 +31,14 @@ MEASUREMENTS = {
     "NLH": ("Current",),
     "SHHV": ("Angle+Field", "Angle+Current"),
     "Switch-OOP": ("Switch", "Switch-loop", "Switch2"),
+    "Switch-IP": ("Switch", "Switch-loop", "Switch2"),
 }
 
 
 class TheTable(unittest.TestCase):
     def test_the_measurements_their_order_and_their_scans_are_the_users(self):
         self.assertEqual(dict(app.RTE_MEASUREMENTS), MEASUREMENTS)
-        self.assertEqual(tuple(app.RTE_MEASUREMENTS), ("PHE", "AHE", "NLH", "SHHV", "Switch-OOP"))
+        self.assertEqual(tuple(app.RTE_MEASUREMENTS), ("PHE", "AHE", "NLH", "SHHV", "Switch-OOP", "Switch-IP"))
 
     def test_every_scan_is_one_the_page_has(self):
         for name, scans in app.RTE_MEASUREMENTS.items():
@@ -258,6 +259,60 @@ class ThePage(unittest.TestCase):
         self.assertEqual(asked, ["830_a", "830_a"])
         panel.rte_set_measurement("AHE")
         self.assertEqual(asked, ["830_a", "830_a"])
+
+    def test_the_switch_ip_tab_is_switch_oop_with_14_ma_30_us_and_the_2nd_harmonic(self):
+        """User, 2026-11-27: "add a Switch-IP module which use 14mA to -14mA
+        step 2mA as default and SR830-1 use harmonic 2 pls. pulse width
+        default 30us. the other settings are the same as Switch-OOP"."""
+        self.assertEqual(app.RTE_MEASUREMENTS["Switch-IP"], app.RTE_MEASUREMENTS["Switch-OOP"])
+        panel = self.page()
+        panel.rte_set_measurement("Switch-OOP")
+        oop = self.shown(panel)
+        panel = self.page()
+        panel.rte_set_measurement("Switch-IP")
+        self.assertEqual(self.shown(panel), ("Switch-loop", ["14", "-14", "2"], "1", "30", "30", True, "200", "30", "1",
+                                             "0.5", "317.3", "100", "2"))
+        # Only the loop, the pulse width and the harmonic differ.
+        self.assertEqual([i for i, (a, b) in enumerate(zip(self.shown(panel), oop)) if a != b], [1, 7, 12])
+        self.assertEqual({key: v.get() for key, v in panel.ppms_lockin_selection.items()},
+                         {"830_a": True, "830_b": False, "830_c": False, "zurich": False})
+        self.assertFalse(panel.ppms_control_safety_var.get())
+        plan = [v for _l, _p, v in app.rte_scan_plan("Switch-loop", "14", "-14", "2", 1, True)]
+        self.assertEqual((plan[0], plan[14], plan[-1], len(plan)), (14.0, -14.0, 14.0, 29))
+        # 30 us is a width the 6221 takes.
+        self.assertLessEqual(app.K6221_MIN_PULSE_WIDTH_S, 30e-6)
+
+    def test_the_loop_the_pulse_width_and_the_harmonic_follow_between_the_two_switch_tabs(self):
+        panel = self.page()
+
+        def three():
+            return ([v.get() for v in panel.ppms_simple_range], panel.rte_pulse_width_us.get(), panel.ppms_transport_harmonic_a_var.get())
+        for name, expected in (("Switch-OOP", (["22", "-22", "2"], "1000", "1")), ("Switch-IP", (["14", "-14", "2"], "30", "2")),
+                               ("Switch-OOP", (["22", "-22", "2"], "1000", "1")), ("Switch-IP", (["14", "-14", "2"], "30", "2"))):
+            panel.rte_set_measurement(name)
+            self.assertEqual(panel.ppms_simple_mode.get(), "Switch-loop", name)
+            self.assertEqual(three(), expected, name)
+        # Choosing Switch-loop again in the list gives this tab's loop.
+        panel.ppms_simple_mode.set("Switch")
+        panel._rte_mode_changed()
+        panel.ppms_simple_mode.set("Switch-loop")
+        panel._rte_mode_changed()
+        self.assertEqual([v.get() for v in panel.ppms_simple_range], ["14", "-14", "2"])
+        # The other tabs show 1000 us again.
+        panel.rte_set_measurement("SHHV")
+        self.assertEqual((panel.rte_pulse_width_us.get(), panel.ppms_transport_harmonic_a_var.get(), panel.ppms_transport_current_var.get()),
+                         ("1000", "2", "1.5"))
+
+    def test_a_typed_loop_or_pulse_width_stays_between_the_two_switch_tabs(self):
+        panel = self.page()
+        panel.rte_set_measurement("Switch-OOP")
+        for variable, value in zip(panel.ppms_simple_range, ("18", "-18", "1")):
+            variable.set(value)
+        panel.rte_pulse_width_us.set("500")
+        panel.rte_set_measurement("Switch-IP")
+        self.assertEqual(([v.get() for v in panel.ppms_simple_range], panel.rte_pulse_width_us.get()), (["18", "-18", "1"], "500"))
+        panel.rte_set_measurement("Switch-OOP")
+        self.assertEqual(([v.get() for v in panel.ppms_simple_range], panel.rte_pulse_width_us.get()), (["18", "-18", "1"], "500"))
 
     def test_the_other_switch_scans_keep_their_own_values(self):
         panel = self.page()

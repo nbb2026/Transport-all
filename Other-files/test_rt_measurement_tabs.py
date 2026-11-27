@@ -22,6 +22,7 @@ MEASUREMENTS = {
     "NLH": ("Current",),
     "SHHV": ("Angle+Field", "Angle+Current"),
     "Switch-OOP": ("Switch", "Switch-loop", "Switch2"),
+    "Switch-IP": ("Switch", "Switch-loop", "Switch2"),
 }
 
 
@@ -57,7 +58,7 @@ class TheTabs(unittest.TestCase):
             self.root.update()
 
     def test_1_the_tabs_are_the_measurements_then_the_log_and_it_starts_on_shhv(self):
-        self.assertEqual(self.titles(), ("PHE", "AHE", "NLH", "SHHV", "Switch-OOP", "Log"))
+        self.assertEqual(self.titles(), ("PHE", "AHE", "NLH", "SHHV", "Switch-OOP", "Switch-IP", "Log"))
         notebook = self.a.notebook
         self.assertEqual(notebook.select(), str(self.a.rte_panel_tab))
         self.assertEqual(notebook.tab("current", "text"), "SHHV")
@@ -65,9 +66,9 @@ class TheTabs(unittest.TestCase):
 
     def test_2_choosing_a_tab_brings_the_one_page_there_with_its_scans(self):
         notebook, panel = self.a.notebook, self.a.rte_panel
-        for name in ("PHE", "Switch-OOP", "AHE", "NLH", "SHHV"):
+        for name in ("PHE", "Switch-OOP", "AHE", "Switch-IP", "NLH", "SHHV"):
             self.choose(name)
-            self.assertEqual(self.titles(), ("PHE", "AHE", "NLH", "SHHV", "Switch-OOP", "Log"), name)
+            self.assertEqual(self.titles(), ("PHE", "AHE", "NLH", "SHHV", "Switch-OOP", "Switch-IP", "Log"), name)
             self.assertEqual(notebook.select(), str(self.a.rte_panel_tab), name)
             self.assertEqual(notebook.tab("current", "text"), name)
             self.assertEqual(panel.rte_measurement, name)
@@ -75,7 +76,7 @@ class TheTabs(unittest.TestCase):
             self.assertEqual(panel.ppms_simple_mode.get(), panel.rte_scan_mode_combo.get())
             self.assertIn(panel.ppms_simple_mode.get(), MEASUREMENTS[name])
             self.assertTrue(panel.rte_start_button.winfo_ismapped(), name)
-            self.assertEqual(len(notebook.tabs()), 6)
+            self.assertEqual(len(notebook.tabs()), 7)
 
     def test_3_the_log_tab_shows_the_log_and_the_measurement_is_kept(self):
         self.choose("Switch-OOP")

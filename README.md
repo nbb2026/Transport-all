@@ -56,9 +56,9 @@ it once into the folder the program is kept in and double-click it:
   GitHub. If the exe in the folder already has that SHA-256, nothing happens.
 - If `Transport_FMR.exe` is running, nothing is changed (a measurement may be
   running): close the program and run it again.
-- Otherwise it downloads the exe, checks its SHA-256, keeps the old one as
-  `Transport_FMR_previous.exe` and puts the new one in place. A download that
-  fails or does not match changes nothing.
+- Otherwise it downloads the exe, checks its SHA-256, puts it in place and
+  deletes the old one (user, 2026-11-27). A download that fails or does not
+  match changes nothing: the old exe stays.
 
 It uses only `curl`, `certutil` and `tasklist`, which are parts of Windows 10
 and 11; nothing is installed. `Update_Transport_FMR.bat start` also starts the

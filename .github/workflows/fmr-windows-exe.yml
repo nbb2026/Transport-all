@@ -228,8 +228,7 @@ jobs:
 
           \`Update_Transport_FMR.bat\`: for the computer the program is used on. Put it in the folder the
           .exe is kept in and double-click it: it downloads the newest \`Transport_FMR.exe\` into that folder
-          (checked against its SHA-256; never while the program is running; the old one is kept as
-          \`Transport_FMR_previous.exe\`).
+          (checked against its SHA-256; never while the program is running) and deletes the old one.
 
           The "Source code" files below are GitHub's snapshot of the tag \`$RELEASE_TAG\`
           (commit ${tag_commit:0:7}), which does not move; the .exe is from the commit above.

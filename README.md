@@ -57,11 +57,17 @@ Scan box (user, 2026-11-27):
 | **AHE** | Field, Field+Angle, Field+Current |
 | **NLH** | Current |
 | **SHHV** | Angle+Field, Angle+Current |
-| **Switch** | Switch, Switch-loop, Switch2 |
+| **Switch-OOP** | Switch, Switch-loop, Switch2 |
 
 - They are one page: the instruments stay connected, and the settings stay as
   they are, when another measurement's tab is chosen. Only the list of scans
   and the plots' title follow the measurement. The program starts on SHHV.
+- **Switch-OOP** opens as the user's figure of 2026-11-27: Switch-loop from 22
+  to -22 mA in 2 mA steps and back, 1 loop, Settle s 30, Acquire s 30, outer
+  field 200 G, 1000 µs pulses, read current 0.5 mA RMS, SR830-1 on the 1st
+  harmonic. The read current and the SR830-1 harmonic go back to 1.5 mA and
+  2 in the other tabs; either box keeps a value that was typed into it. The
+  safety tick is never set by the program.
 - A measurement comes back on the scan it was left on. A scan that is also in
   the new measurement (Angle+Field in PHE and SHHV) keeps what was typed.
 - While a scan runs, or the page is busy, the measurement cannot be changed:
@@ -71,8 +77,13 @@ Scan box (user, 2026-11-27):
 - Everything else is the SHHV & Switch page of Transport-all: Set field, the
   stage controls, the pulse row, the files, run logs and start questions. The
   saved rows and the run's settings have one more entry, `measurement` (PHE,
-  AHE, NLH, SHHV or Switch); the `module` column and the results folder still
-  say SHHV.
+  AHE, NLH, SHHV or Switch-OOP); the `module` column and the results folder
+  still say SHHV.
+- In a wide window three things take one row instead of two: the scan note
+  sits beside Round trip, the stage block (Stage °, Move, Stop, Go to 0°, Set
+  stage 0°, the stage's line) is one row under the settings, and the supply's
+  live line ("Field 1/1 +200 G, step 6: …") is wide enough for one line. A
+  narrow window keeps the two rows.
 - **Log**: the communication log, with pause, copy and save.
 
 Closing the window stops a running scan and the stage, switches the 6221 (and

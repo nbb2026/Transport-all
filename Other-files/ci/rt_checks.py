@@ -31,6 +31,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 SCREENS = (  # (screen width, height, window width or 0 for the program's own)
     (2560, 1440, 2000),  # the lab PC, window widened by hand
+    (2560, 1440, 2400),  # wider still: room for the scan note beside Round trip
     (2560, 1440, 0),     # the lab PC, the program's default window
     (1920, 1080, 0),
     (1600, 1586, 0),
@@ -40,7 +41,7 @@ MEASUREMENTS = {  # user, 2026-11-27: the tabs in this order, each with these sc
     'AHE': ('Field', 'Field+Angle', 'Field+Current'),
     'NLH': ('Current',),
     'SHHV': ('Angle+Field', 'Angle+Current'),
-    'Switch': ('Switch', 'Switch-loop', 'Switch2'),
+    'Switch-OOP': ('Switch', 'Switch-loop', 'Switch2'),
 }
 PAGES = (*MEASUREMENTS, 'Log')
 
@@ -223,7 +224,7 @@ def main():
                                       f"scan {panel.ppms_simple_mode.get()}, tabs {now}")
                 clipped, cut, pairs = inspect(tab)
                 marker = "note" if clipped or cut else "ok  "
-                print(f"  {marker} {name:6s} layouts {pairs} | clipped {clipped or 'none'} | text cut {cut or 'none'}")
+                print(f"  {marker} {name:10s} layouts {pairs} | clipped {clipped or 'none'} | text cut {cut or 'none'}")
                 if args.shots and screen_w == 2560:
                     args.shots.mkdir(parents=True, exist_ok=True)
                     if name not in MEASUREMENTS:

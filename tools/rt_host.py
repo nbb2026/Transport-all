@@ -72,6 +72,7 @@ SOURCE_REPLACE = (
      (
          "RTE_TAB_TITLE = 'SHHV & Switch'\n"
          'RTE_MEASUREMENTS = {}\n'
+         'RTE_MEASUREMENT_START = {}\n'
          "RTE_DEFAULT_MEASUREMENT = ''\n"
          'RTE_SCAN_BOX_FIRST = False\n'
          "RTE_PLOT_TITLE_TAIL = 'X, Y, phase vs measured field / excitation current / sample angle / pulse current'\n"
@@ -154,14 +155,27 @@ SOURCE_REPLACE = (
          "        combo = state.get('rte_scan_mode_combo')\n"
          '        if combo is not None:\n'
          '            combo.configure(values=scans)\n'
-         '        scan = kept.get(name) if kept.get(name) in scans else scans[0]\n'
+         '        start = RTE_MEASUREMENT_START.get(name, {})\n'
+         "        scan = kept.get(name) if kept.get(name) in scans else start.get('scan') if start.get('scan') in scans else scans[0]\n"
          '        if scan != self.ppms_simple_mode.get():\n'
          '            self.ppms_simple_mode.set(scan)\n'
          '            self._rte_mode_changed()\n'
          "        frame = state.get('ppms_plot_frame')\n"
          '        if frame is not None:\n'
          "            frame.configure(text=f'{name}: {RTE_PLOT_TITLE_TAIL}')\n"
+         '        self._rte_show_measurement_start(start)\n'
          '        return True\n'
+         '    def _rte_show_measurement_start(self, start):\n'
+         '        state = self.__dict__\n'
+         "        shown = state.setdefault('rte_measurement_shown', {})\n"
+         "        for key, attr, base in (('current_ma', 'ppms_transport_current_var', f'{RTE_TRANSPORT_CURRENT_RMS_MA:g}'), ('harmonic_a', 'ppms_transport_harmonic_a_var', '2')):\n"
+         '            variable, new, was = state.get(attr), str(start.get(key, base)), shown.get(key, base)\n'
+         '            if variable is None or new == was or str(variable.get()).strip() != was:\n'
+         '                continue\n'
+         '            variable.set(new)\n'
+         '            shown[key] = new\n'
+         "            if key == 'harmonic_a':\n"
+         "                self._ppms_apply_selected_harmonic('830_a')\n"
          '    def _rte_mode_changed(self, _event=None):\n'
      )),
     ('                row = dict(module=self.ppms_page_name, scan_mode=mode, loop=loop, point=point,\n',
@@ -174,25 +188,127 @@ SOURCE_REPLACE = (
          "            file_name=typed_name, **({'measurement': state['rte_measurement']} if state.get('rte_measurement') else {}), mode=mode,\n"
          "            plan=dict(**(dict(typed=box(state.get('rte_switch2_pulses_var'"
      )),
+    ("SWITCH_DEFAULT_FIELDS_G = '-12'\n",
+     "SWITCH_DEFAULT_FIELDS_G = '-12'\nSWITCH_LOOP_DEFAULT_FIELDS_G = SWITCH_DEFAULT_FIELDS_G\n"),
+    ("    SWITCH_LOOP_SCAN_MODE: dict(label='Outer field G:', defaults=(SWITCH_DEFAULT_FIELDS_G,),\n",
+     "    SWITCH_LOOP_SCAN_MODE: dict(label='Outer field G:', defaults=(SWITCH_LOOP_DEFAULT_FIELDS_G,),\n"),
+    # One row where there were two (user, 2026-11-27: "shrink the two row in the figure to one row", "this also
+    # one row"): the scan note beside Round trip wherever there is room, the stage block in one row under the
+    # parameters and lock-ins where it fits, and the supply's and field's live lines wide enough for one line
+    # where the connections are in two columns.  A narrow window keeps the two rows.
+    ((
+        '    def _rte_arrange_connection_columns(self, measurement, rack, instruments, live):\n'
+        '        def rack_width() -> int:\n'
+    ),
+     (
+         '    def _rte_arrange_connection_columns(self, measurement, rack, instruments, live):\n'
+         '        def live_zero_px(widget) -> int:\n'
+         "            return tkfont.nametofont('TkDefaultFont', root=widget).measure('0')\n"
+         '        def rack_width() -> int:\n'
+     )),
+    ('            moved = max((widget.winfo_reqwidth() for widget in live), default=0)\n',
+     "            moved = max((RTE_LIVE_WIDE_CHARS * live_zero_px(widget) + 16 if widget.winfo_class() == 'TLabel' else widget.winfo_reqwidth() for widget in live), default=0)\n"),
+    ((
+        '            measurement._rte_live_beside_rack = not side\n'
+        '            try:\n'
+    ),
+     (
+         '            measurement._rte_live_beside_rack = not side\n'
+         '            try:\n'
+         '                for widget in live:\n'
+         "                    if widget.winfo_class() == 'TLabel':\n"
+         '                        chars = RTE_LIVE_WIDE_CHARS if side else 32\n'
+         '                        widget.configure(width=chars, wraplength=chars * live_zero_px(widget))\n'
+     )),
+    ('                    note = stacked and room > 1 and room >= rows_width + note_label.winfo_reqwidth() + 14\n',
+     '                    note = room > 1 and room >= rows_width + note_label.winfo_reqwidth() + 14\n'),
+    ((
+        "                if self.__dict__.get('rte_note_place', 'under') != ('beside' if note else 'under'):\n"
+        "                    self.rte_note_place = 'beside' if note else 'under'\n"
+        '                    note_label.grid_configure(**(note_beside if note else note_under))\n'
+    ),
+     (
+         "                note_place = ('beside' if stacked else 'beside, wide') if note else 'under'\n"
+         "                if self.__dict__.get('rte_note_place', 'under') != note_place:\n"
+         '                    self.rte_note_place = note_place\n'
+         "                    note_label.grid_configure(**({**note_beside, 'sticky': 'e' if stacked else 'w'} if note else note_under))\n"
+     )),
+    ('            def arrange_stage_block(_event=None):\n',
+     (
+         '            zero_cell = zero.master if zero.master is not stage_box else zero\n'
+         '            stage_live, stage_widths = live, {}\n'
+         '            def stage_tall_width():\n'
+         "                if not getattr(stage_box, '_rte_stage_one_row', False):\n"
+         "                    stage_widths['tall'] = stage_box.winfo_reqwidth()\n"
+         "                return stage_widths.get('tall', 0)\n"
+         '            def stage_one_row(one_row):\n'
+         "                if getattr(stage_box, '_rte_stage_one_row', False) is one_row:\n"
+         '                    return\n'
+         '                stage_box._rte_stage_one_row = one_row\n'
+         '                if one_row:\n'
+         "                    zero_cell.grid_configure(row=0, column=5, columnspan=1, sticky='ew', padx=(6, 0))\n"
+         "                    stage_live.grid_configure(row=0, column=6, columnspan=1, sticky='w', padx=(6, 0))\n"
+         '                else:\n'
+         "                    zero_cell.grid_configure(row=1, column=0, columnspan=2, sticky='ew', padx=0)\n"
+         "                    stage_live.grid_configure(row=1, column=2, columnspan=3, sticky='w', padx=(2, 0))\n"
+         '            def arrange_stage_block(_event=None):\n'
+     )),
+    ('                    block = 16 + stage_box.winfo_reqwidth()\n',
+     '                    block = 16 + stage_tall_width()\n'),
+    ((
+        "                place = 'beside lock-ins' if beside else 'under params' if side else 'under lock-ins'\n"
+        "                if getattr(stage_box, '_rte_stage_place', None) == place:\n"
+        '                    return\n'
+        '                stage_box._rte_stage_place = place\n'
+    ),
+     (
+         "                place = 'beside lock-ins' if beside else 'under params' if side else 'under lock-ins'\n"
+         '                try:\n'
+         "                    one_row = place == 'under params' and params.winfo_reqwidth() + lockins.winfo_reqwidth() >= stage_tall_width() + zero_cell.winfo_reqwidth() + stage_live.winfo_reqwidth() + 16\n"
+         '                except (tk.TclError, ValueError):\n'
+         '                    return\n'
+         "                if getattr(stage_box, '_rte_stage_place', None) == place and getattr(stage_box, '_rte_stage_one_row', False) is one_row:\n"
+         '                    return\n'
+         '                stage_box._rte_stage_place = place\n'
+         '                stage_one_row(one_row)\n'
+     )),
+    ("                    stage_box.grid_configure(in_=body, row=1, column=0, columnspan=1, sticky='nw', padx=0, pady=(4, 0))\n",
+     "                    stage_box.grid_configure(in_=body, row=1, column=0, columnspan=2 if one_row else 1, sticky='nw', padx=0, pady=(4, 0))\n"),
 )
 
 MAIN_WINDOW_TITLE = "Transport_RT_NH"
 # Its own icon (Other-files/assets): the main program's picture in another colour, with the name on it.
 APPLICATION_ICON_BASENAME = "Transport_RT"
 # The measurements of this program, in tab order, each with the scans it offers (user, 2026-11-27: "split SHHV
-# and Switch to two modes. also add modes named NLH, AHE, PHE. In the order: PHE, AHE, NLH, SHHV, Switch").
+# and Switch to two modes. also add modes named NLH, AHE, PHE. In the order: PHE, AHE, NLH, SHHV, Switch";
+# then "rename the switch to switch-OOP": the Switch tab, whose scans keep their names).
 # They are tabs of one page: the instruments stay connected when the measurement changes.
 RTE_MEASUREMENTS = {
     "PHE": ("Angle+Field", "Angle+Current"),
     "AHE": ("Field", "Field+Angle", "Field+Current"),
     "NLH": ("Current",),
     "SHHV": ("Angle+Field", "Angle+Current"),
-    "Switch": ("Switch", "Switch-loop", "Switch2"),
+    "Switch-OOP": ("Switch", "Switch-loop", "Switch2"),
 }
 # The program starts on SHHV: the page's start-up settings (2nd harmonic, Angle+Field) are that measurement's.
 RTE_DEFAULT_MEASUREMENT = "SHHV"
 # The Scan box on the left and the Settings box on the right (user, same request).
 RTE_SCAN_BOX_FIRST = True
+# What the Switch-OOP tab starts with (user's figure, 2026-11-27: "default settings use fig in switch mode in RT"):
+# Switch-loop from 22 to -22 mA in 2 mA steps and back, at 200 G, 1000 us pulses, a 0.5 mA RMS read current
+# and SR830-1 on the 1st harmonic.  Loops 1, Settle s 30, Acquire s 30, Round trip, Pulses 1 and Compliance V
+# 100 were the Switch-loop scan's already.  The safety tick stays the user's to make.
+# The scan a measurement opens on the first time, and the read current and SR830-1 harmonic shown while it is
+# chosen: these two boxes follow the measurement only while they still hold what the program put there, so a
+# typed value stays (the rule of Acquire s); the other measurements show 1.5 mA and harmonic 2 as before.
+RTE_MEASUREMENT_START = {"Switch-OOP": dict(scan="Switch-loop", current_ma="0.5", harmonic_a="1")}
+SWITCH_LOOP_DEFAULT_RANGE = ("22", "-22", "2")
+SWITCH_LOOP_DEFAULT_FIELDS_G = "200"
+# The live lines' width, in characters, beside the instrument rows of a wide window (32 beside the rack, where a
+# long line wraps): "Field 1/1 +200 G, step 6: I -1.136 A, B +198.667 G" on one line.
+RTE_LIVE_WIDE_CHARS = 48
+# The Pulse us box is one box for the Switch scans and Apply pulse, on every tab.
+SWITCH_DEFAULT_PULSE_WIDTH_US = 1000.0
 
 
 class CombinedControlApp:

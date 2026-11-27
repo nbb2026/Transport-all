@@ -203,9 +203,9 @@ class SwitchPageTests(unittest.TestCase):
         panel = ete.build_page(kepco=False)
         self.assertEqual(panel.ppms_transport_compliance_var.get(), "100")
         self.assertEqual(app.RTE_TRANSPORT_COMPLIANCE_V, 100.0)
-        # Pulse µs starts at 10 (user, 2026-11-24: "change default as
-        # this"; 20 earlier that day, 50 from 2026-11-22), one pulse per write.
-        self.assertEqual((panel.rte_pulse_width_us.get(), panel.rte_pulse_count.get()), ("10", "1"))
+        # Pulse µs starts at 1000 in this program (user's figure, 2026-11-27: "default settings use fig in
+        # switch mode in RT"; 10 in the main program since 2026-11-24), one pulse per write.
+        self.assertEqual((panel.rte_pulse_width_us.get(), panel.rte_pulse_count.get()), ("1000", "1"))
         parts = panel.rte_apply_pulse_parts
         self.assertEqual([w.options.get("text") for w, _options in parts if "text" in w.options],
                          ["Pulse mA", "Pulse µs", "Pulses", "Apply pulse"])
@@ -608,12 +608,14 @@ class SwitchScanTests(SwitchScan):
         with patch.object(app.CombinedControlApp, "_draw_nonlocal_series"):
             panel.ppms_simple_mode.set("Switch-loop")
             panel._rte_mode_changed()
-        self.assertEqual([v.get() for v in panel.ppms_simple_range], ["14", "-14", "2"])
+        # 22 to -22 mA in 2 mA steps at 200 G in this program (user's figure, 2026-11-27); 14, -14, 2 at -12 G
+        # in the main program.
+        self.assertEqual([v.get() for v in panel.ppms_simple_range], ["22", "-22", "2"])
         self.assertIs(panel.rte_round_trip.get(), True)
         self.assertEqual(panel.rte_scan_units.get(), "6221 pulse mA")
         self.assertEqual(panel.rte_scan_note.get(), "Switch-loop: pulse mA; outer: field G")
         self.assertEqual(panel.rte_outer_label.get(), "Outer field G:")
-        self.assertEqual(panel.rte_outer_ranges["Switch-loop"][0].get(), "-12")
+        self.assertEqual(panel.rte_outer_ranges["Switch-loop"][0].get(), "200")
         self.assertEqual(panel.ppms_plot_axis, "pulse")
         self.assertEqual([v for _l, _p, v in app.rte_scan_plan("Switch-loop", "14", "-14", "2", 1, True)],
                          [14.0 - 2 * i for i in range(15)] + [-12.0 + 2 * i for i in range(14)])

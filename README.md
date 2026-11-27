@@ -49,6 +49,26 @@ driver, LabOne for the Zurich MFLI, and MultiVu / QDInstrument for the PPMS.
 on LabOne 18.12 needs the Python 3.7 bridge from
 [`Other-files/INSTALL_MFLI_LABONE_18_12.bat`](Other-files/INSTALL_MFLI_LABONE_18_12.bat).
 
+## Keeping the lab computer's exe up to date
+
+[`Update_Transport_PPMS.bat`](Update_Transport_PPMS.bat) puts the newest
+`Transport_PPMS.exe` into the folder the `.bat` is in (user, 2026-11-27). Copy
+it once into the folder the program is kept in and double-click it:
+
+- It reads this branch's version and the SHA-256 of that version's exe from
+  GitHub. If the exe in the folder already has that SHA-256, nothing happens.
+- If `Transport_PPMS.exe` is running, nothing is changed (a measurement may be
+  running): close the program and run it again.
+- Otherwise it downloads the exe, checks its SHA-256, keeps the old one as
+  `Transport_PPMS_previous.exe` and puts the new one in place. A download that
+  fails or does not match changes nothing.
+
+It uses only `curl`, `certutil` and `tasklist`, which are parts of Windows 10
+and 11; nothing is installed. `Update_Transport_PPMS.bat start` also starts the
+program afterwards (or set `START_AFTER=1` in the file and use it as the
+shortcut); `quiet` does not wait for a key. It is also a file of the release,
+beside the exe. Tests: `test_update_bat.py`.
+
 ## What is in the window
 
 Two pages:

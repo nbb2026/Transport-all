@@ -1910,8 +1910,9 @@ RTE_MEASUREMENTS = {
 }
 RTE_MEASUREMENT_START = {
     "PHE": dict(scan="Angle+Field", harmonic_a="1", angle_field_g="200"),
+    "AHE": dict(scan="Field", current_ma="0.5", harmonic_a="1", ranges={"Field": ("-3", "3", "0.1")}),
     "Switch-OOP": dict(scan="Switch-loop", current_ma="0.5", harmonic_a="1"),
-    "Switch-IP": dict(scan="Switch-loop", current_ma="0.5", harmonic_a="2", loop_range=("14", "-14", "2"), pulse_width_us="30"),
+    "Switch-IP": dict(scan="Switch-loop", current_ma="0.5", harmonic_a="2", ranges={"Switch-loop": ("14", "-14", "2")}, pulse_width_us="30"),
 }
 RTE_DEFAULT_MEASUREMENT = "SHHV"
 RTE_SCAN_BOX_FIRST = True
@@ -14566,7 +14567,7 @@ class RTEPanel(PPMSPanel):
             self.ppms_simple_mode.set(scan)
             self._rte_mode_changed()
         elif scan == SWITCH_LOOP_SCAN_MODE:
-            old, new = (tuple(RTE_MEASUREMENT_START.get(n, {}).get('loop_range') or SWITCH_LOOP_DEFAULT_RANGE) for n in (was, name))
+            old, new = (tuple(RTE_MEASUREMENT_START.get(n, {}).get('ranges', {}).get(scan) or SWITCH_LOOP_DEFAULT_RANGE) for n in (was, name))
             if old != new and tuple(str(v.get()).strip() for v in self.ppms_simple_range) == old:
                 for variable, value in zip(self.ppms_simple_range, new):
                     variable.set(value)
@@ -14593,7 +14594,7 @@ class RTEPanel(PPMSPanel):
         angle = mode in RTE_ANGLE_MODES
         switch = mode in SWITCH_MODES
         self.rte_round_trip.set(mode in (*RTE_FIELD_SWEEP_MODES, SWITCH_LOOP_SCAN_MODE, SWITCH2_SCAN_MODE))
-        defaults = ('0.01', '1', '0.01') if current else RTE_ANGLE_DEFAULT_RANGE if angle else (RTE_MEASUREMENT_START.get(self.__dict__.get('rte_measurement'), {}).get('loop_range') or SWITCH_LOOP_DEFAULT_RANGE) if mode == SWITCH_LOOP_SCAN_MODE else () if switch else RTE_FIELD_DEFAULT_RANGE
+        defaults = ('0.01', '1', '0.01') if current else RTE_ANGLE_DEFAULT_RANGE if angle else (RTE_MEASUREMENT_START.get(self.__dict__.get('rte_measurement'), {}).get('ranges', {}).get(mode) or SWITCH_LOOP_DEFAULT_RANGE) if mode == SWITCH_LOOP_SCAN_MODE else () if switch else (RTE_MEASUREMENT_START.get(self.__dict__.get('rte_measurement'), {}).get('ranges', {}).get(mode) or RTE_FIELD_DEFAULT_RANGE)
         for variable, value in zip(self.ppms_simple_range, defaults):
             variable.set(value)
         acquire = self.__dict__.get('ppms_acquisition_time_var')

@@ -161,7 +161,7 @@ SOURCE_REPLACE = (
          '            self.ppms_simple_mode.set(scan)\n'
          '            self._rte_mode_changed()\n'
          '        elif scan == SWITCH_LOOP_SCAN_MODE:\n'
-         "            old, new = (tuple(RTE_MEASUREMENT_START.get(n, {}).get('loop_range') or SWITCH_LOOP_DEFAULT_RANGE) for n in (was, name))\n"
+         "            old, new = (tuple(RTE_MEASUREMENT_START.get(n, {}).get('ranges', {}).get(scan) or SWITCH_LOOP_DEFAULT_RANGE) for n in (was, name))\n"
          '            if old != new and tuple(str(v.get()).strip() for v in self.ppms_simple_range) == old:\n'
          '                for variable, value in zip(self.ppms_simple_range, new):\n'
          '                    variable.set(value)\n'
@@ -281,7 +281,7 @@ SOURCE_REPLACE = (
     ("                    stage_box.grid_configure(in_=body, row=1, column=0, columnspan=1, sticky='nw', padx=0, pady=(4, 0))\n",
      "                    stage_box.grid_configure(in_=body, row=1, column=0, columnspan=2 if one_row else 1, sticky='nw', padx=0, pady=(4, 0))\n"),
     ("RTE_ANGLE_DEFAULT_RANGE if angle else SWITCH_LOOP_DEFAULT_RANGE if mode == SWITCH_LOOP_SCAN_MODE else () if switch else RTE_FIELD_DEFAULT_RANGE",
-     "RTE_ANGLE_DEFAULT_RANGE if angle else (RTE_MEASUREMENT_START.get(self.__dict__.get('rte_measurement'), {}).get('loop_range') or SWITCH_LOOP_DEFAULT_RANGE) if mode == SWITCH_LOOP_SCAN_MODE else () if switch else RTE_FIELD_DEFAULT_RANGE"),
+     "RTE_ANGLE_DEFAULT_RANGE if angle else (RTE_MEASUREMENT_START.get(self.__dict__.get('rte_measurement'), {}).get('ranges', {}).get(mode) or SWITCH_LOOP_DEFAULT_RANGE) if mode == SWITCH_LOOP_SCAN_MODE else () if switch else (RTE_MEASUREMENT_START.get(self.__dict__.get('rte_measurement'), {}).get('ranges', {}).get(mode) or RTE_FIELD_DEFAULT_RANGE)"),
     ("        stem = typed or time.strftime(f'{self.ppms_page_name}_%Y%m%d_%H%M%S')\n",
      "        stem = typed or time.strftime(f\"{self.__dict__.get('rte_measurement') or self.ppms_page_name}_%Y%m%d_%H%M%S\")\n"),
     ("initialfile=time.strftime(f'{self.ppms_page_name}_%Y%m%d_%H%M%S.csv'),",
@@ -321,12 +321,17 @@ RTE_SCAN_BOX_FIRST = True
 # Switch-IP (user, 2026-11-27: "add a Switch-IP module which use 14mA to -14mA step 2mA as default and SR830-1
 # use harmonic 2 pls. pulse width default 30us. the other settings are the same as Switch-OOP"): the tab after
 # Switch-OOP, with its scans, Switch-loop, 200 G and 0.5 mA; its own are the loop 14 to -14 mA in 2 mA
-# (loop_range: what Switch-loop's Start, End, Step show in this tab), 30 us pulses (pulse_width_us: the one
+# (ranges: what a scan's Start, End, Step show in this tab), 30 us pulses (pulse_width_us: the one
 # Pulse us box, 1000 in the other tabs) and SR830-1 on the 2nd harmonic.  Typed values stay, as above.
+# AHE (user's figure, 2026-11-27: "default setting as the figure for AHE module"): the Field scan from -3 to
+# 3 A in 0.1 A and back, a 0.5 mA RMS read current, SR830-1 on the 1st harmonic; Settle s 0.5, Acquire s 2 and
+# Round trip were the Field scan's already.  The figure shows the Field scan, so Field+Angle and Field+Current
+# keep the -1 to 1 A in 0.02 A of 2026-11-22.
 RTE_MEASUREMENT_START = {
     "PHE": dict(scan="Angle+Field", harmonic_a="1", angle_field_g="200"),
+    "AHE": dict(scan="Field", current_ma="0.5", harmonic_a="1", ranges={"Field": ("-3", "3", "0.1")}),
     "Switch-OOP": dict(scan="Switch-loop", current_ma="0.5", harmonic_a="1"),
-    "Switch-IP": dict(scan="Switch-loop", current_ma="0.5", harmonic_a="2", loop_range=("14", "-14", "2"), pulse_width_us="30"),
+    "Switch-IP": dict(scan="Switch-loop", current_ma="0.5", harmonic_a="2", ranges={"Switch-loop": ("14", "-14", "2")}, pulse_width_us="30"),
 }
 SWITCH_LOOP_DEFAULT_RANGE = ("22", "-22", "2")
 SWITCH_LOOP_DEFAULT_FIELDS_G = "200"

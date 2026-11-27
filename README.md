@@ -69,6 +69,11 @@ Scan box (user, 2026-11-27):
   harmonic. The read current and the SR830-1 harmonic go back to 1.5 mA and
   2 in the other tabs; either box keeps a value that was typed into it. The
   safety tick is never set by the program.
+- **AHE** opens as the user's third figure of 2026-11-27: the Field scan from
+  -3 to 3 A in 0.1 A steps and back, 1 loop, Settle s 0.5, Acquire s 2, read
+  current 0.5 mA RMS, SR830-1 on the 1st harmonic and the only lock-in
+  measured. The figure is the Field scan: Field+Angle and Field+Current keep
+  -1 to 1 A in 0.02 A.
 - **Switch-IP** is Switch-OOP with three values of its own: Switch-loop from
   14 to -14 mA in 2 mA steps and back, 30 µs pulses, SR830-1 on the 2nd
   harmonic. The rest is Switch-OOP's (200 G, 0.5 mA RMS read current, Settle s

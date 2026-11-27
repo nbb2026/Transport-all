@@ -79,7 +79,7 @@ class ThePage(unittest.TestCase):
     def test_a_new_scan_is_set_up_as_choosing_it_in_the_list_does(self):
         panel = self.page()
         panel.rte_set_measurement("AHE")
-        self.assertEqual([v.get() for v in panel.ppms_simple_range], list(app.RTE_FIELD_DEFAULT_RANGE))
+        self.assertEqual([v.get() for v in panel.ppms_simple_range], ["-3", "3", "0.1"])
         self.assertTrue(panel.rte_round_trip.get())
         self.assertEqual(panel.rte_scan_units.get(), "LS643 A")
         panel.rte_set_measurement("NLH")
@@ -130,7 +130,8 @@ class ThePage(unittest.TestCase):
     def test_nothing_else_follows_the_measurement(self):
         """ "the others remain the same": the read current, the harmonics and
         which lock-ins are measured are not the measurement's to change
-        (PHE and Switch-OOP have start-up values of their own since: below)."""
+        (PHE, AHE and the Switch tabs have start-up values of their own since:
+        below)."""
         panel = self.page()
 
         def settings():
@@ -140,7 +141,7 @@ class ThePage(unittest.TestCase):
                     panel.zurich_harmonic.get(), {key: v.get() for key, v in panel.ppms_lockin_selection.items()},
                     panel.ppms_page_name, {c.owner_scope for c in panel.rte_controllers.values()})
         before = settings()
-        for name in ("AHE", "NLH", "SHHV"):
+        for name in ("NLH", "SHHV"):
             panel.rte_set_measurement(name)
             self.assertEqual(settings(), before, name)
 
@@ -216,14 +217,45 @@ class ThePage(unittest.TestCase):
         panel.rte_set_measurement("PHE")
         self.assertEqual((box.get(), panel.ppms_transport_harmonic_a_var.get()), ("500", "1"))
 
+    def test_the_ahe_tab_starts_as_the_users_figure(self):
+        """User's figure, 2026-11-27 ("default setting as the figure for AHE
+        module"): Field -3 to 3 A in 0.1 A, 1 loop, Settle s 0.5, Acquire s 2,
+        Round trip; 0.5 mA RMS at 317.3 Hz, 100 V; SR830-1 on the 1st harmonic
+        and the only one measured."""
+        panel = self.page()
+        panel.rte_set_measurement("AHE")
+        self.assertEqual((panel.ppms_simple_mode.get(), [v.get() for v in panel.ppms_simple_range], str(panel.ppms_field_scan_loop_var.get()),
+                          panel.ppms_field_scan_stable_var.get(), panel.ppms_acquisition_time_var.get(), panel.rte_round_trip.get()),
+                         ("Field", ["-3", "3", "0.1"], "1", "0.5", "2", True))
+        self.assertEqual((panel.ppms_transport_current_var.get(), panel.ppms_transport_frequency_var.get(),
+                          panel.ppms_transport_compliance_var.get()), ("0.5", "317.3", "100"))
+        self.assertEqual((panel.ppms_transport_harmonic_a_var.get(), panel.ppms_transport_harmonic_b_var.get(),
+                          panel.ppms_transport_harmonic_c_var.get(), panel.zurich_harmonic.get()), ("1", "2", "3", "1+2"))
+        self.assertEqual({key: v.get() for key, v in panel.ppms_lockin_selection.items()},
+                         {"830_a": True, "830_b": False, "830_c": False, "zurich": False})
+        self.assertEqual((panel.rte_pulse_current_ma.get(), panel.rte_pulse_width_us.get(), panel.rte_pulse_count.get()), ("10", "1000", "1"))
+        self.assertFalse(panel.ppms_control_safety_var.get())
+        # -3 to 3 and back: 121 points.
+        plan = [v for _l, _p, v in app.rte_scan_plan("Field", "-3", "3", "0.1", 1, True)]
+        self.assertEqual((plan[0], round(plan[60], 9), plan[-1], len(plan)), (-3.0, 3.0, -3.0, 121))
+        # The figure is the Field scan: the other two field sweeps keep theirs,
+        # and Field shows -3 to 3 again when it is chosen again.
+        for scan in ("Field+Angle", "Field+Current"):
+            panel.ppms_simple_mode.set(scan)
+            panel._rte_mode_changed()
+            self.assertEqual([v.get() for v in panel.ppms_simple_range], list(app.RTE_FIELD_DEFAULT_RANGE), scan)
+        panel.ppms_simple_mode.set("Field")
+        panel._rte_mode_changed()
+        self.assertEqual([v.get() for v in panel.ppms_simple_range], ["-3", "3", "0.1"])
+
     def test_the_read_current_and_harmonic_go_back_with_the_other_measurements(self):
         panel = self.page()
         self.assertEqual((panel.ppms_transport_current_var.get(), panel.ppms_transport_harmonic_a_var.get()), ("1.5", "2"))
         panel.rte_set_measurement("Switch-OOP")
         self.assertEqual((panel.ppms_transport_current_var.get(), panel.ppms_transport_harmonic_a_var.get()), ("0.5", "1"))
-        for name, harmonic in (("SHHV", "2"), ("AHE", "2"), ("PHE", "1"), ("NLH", "2")):
+        for name, current, harmonic in (("SHHV", "1.5", "2"), ("AHE", "0.5", "1"), ("PHE", "1.5", "1"), ("NLH", "1.5", "2")):
             panel.rte_set_measurement(name)
-            self.assertEqual((panel.ppms_transport_current_var.get(), panel.ppms_transport_harmonic_a_var.get()), ("1.5", harmonic), name)
+            self.assertEqual((panel.ppms_transport_current_var.get(), panel.ppms_transport_harmonic_a_var.get()), (current, harmonic), name)
         panel.rte_set_measurement("Switch-OOP")
         self.assertEqual((panel.ppms_transport_current_var.get(), panel.ppms_transport_harmonic_a_var.get()), ("0.5", "1"))
 
@@ -257,7 +289,7 @@ class ThePage(unittest.TestCase):
         self.assertEqual(asked, ["830_a"])
         panel.rte_set_measurement("SHHV")
         self.assertEqual(asked, ["830_a", "830_a"])
-        panel.rte_set_measurement("AHE")
+        panel.rte_set_measurement("NLH")
         self.assertEqual(asked, ["830_a", "830_a"])
 
     def test_the_switch_ip_tab_is_switch_oop_with_14_ma_30_us_and_the_2nd_harmonic(self):

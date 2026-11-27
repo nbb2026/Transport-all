@@ -12,9 +12,11 @@ rem       nbb2026/Transport-all) and the SHA-256 of that version's exe;
 rem    2. if the Transport_PPMS.exe here already has that SHA-256: nothing;
 rem    3. if Transport_PPMS.exe is running: nothing (a measurement may be
 rem       running; close the program and run this again);
-rem    4. otherwise downloads the exe, checks its SHA-256, keeps the old
-rem       one as Transport_PPMS_previous.exe and puts the new one in place.
-rem  A download that fails or does not match its SHA-256 changes nothing.
+rem    4. otherwise downloads the exe, checks its SHA-256, puts it in
+rem       place and deletes the old one (also a Transport_PPMS_previous.exe
+rem       that the first version of this file left behind).
+rem  A download that fails or does not match its SHA-256 changes nothing:
+rem  the old exe stays.
 rem
 rem  Options (type them after the file name, or edit the line below):
 rem    quiet   do not wait for a key at the end
@@ -33,7 +35,9 @@ set "RELEASE_URL=https://github.com/nbb2026/Transport-all/releases/download"
 set "TAG_PREFIX=ppms-v"
 
 set "EXE=%NAME%.exe"
+rem The old exe's name while the new one is put in place; deleted afterwards.
 set "PREVIOUS=%NAME%_previous.exe"
+set "HAD_OLD=0"
 set "INFO=%NAME%_BUILD_INFO.txt"
 set "RESULT=1"
 set "QUIET=0"
@@ -82,6 +86,7 @@ if not "%NEW_HASH:~64,1%"=="" goto bad_hash_file
 
 rem --- 2. the exe here ---------------------------------------------------------
 if not exist "%EXE%" goto download
+set "HAD_OLD=1"
 call :hash "%EXE%"
 set "OLD_HASH=%HASH%"
 if /i "%OLD_HASH%"=="%NEW_HASH%" goto already_newest
@@ -103,17 +108,22 @@ if errorlevel 1 goto old_in_use
 :put_new
 move /y "%EXE%.download" "%EXE%" >nul
 if errorlevel 1 goto put_failed
+if exist "%PREVIOUS%" del /f /q "%PREVIOUS%" >nul 2>nul
 curl.exe -fsSL --connect-timeout 15 --max-time 60 -o "%INFO%" "%BASE%/BUILD_INFO.txt" 2>nul
 echo.
 echo UPDATED: %EXE% is now the newest (version %VERSION%).
 if exist "%INFO%" findstr /b /c:"Commit:" /c:"Built:" "%INFO%"
-if exist "%PREVIOUS%" echo The one that was here is kept as %PREVIOUS%.
+if exist "%PREVIOUS%" echo The old one could not be deleted: it is still here as %PREVIOUS%.
+if not exist "%PREVIOUS%" if "%HAD_OLD%"=="1" echo The old one is deleted.
 set "RESULT=0"
 goto finish
 
 :already_newest
 echo UP TO DATE: %EXE% is already the newest (version %VERSION%).
 set "RESULT=0"
+if not exist "%PREVIOUS%" goto finish
+del /f /q "%PREVIOUS%" >nul 2>nul
+if not exist "%PREVIOUS%" echo The old %PREVIOUS% left by an earlier update is deleted.
 goto finish
 
 :running

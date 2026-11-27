@@ -112,7 +112,7 @@ class AgainstAStandInRelease(unittest.TestCase):
         return run_script(self.script, *args, cwd=str(self.tmp), timeout=300)
 
     def left_over(self):
-        return sorted(p.name for p in self.folder.iterdir() if p.name not in (SCRIPT.name, EXE, f"{NAME}_previous.exe", f"{NAME}_BUILD_INFO.txt"))
+        return sorted(p.name for p in self.folder.iterdir() if p.name not in (SCRIPT.name, EXE, f"{NAME}_BUILD_INFO.txt"))
 
     def test_an_empty_folder_gets_the_exe(self):
         code, said = self.run_it()
@@ -122,6 +122,7 @@ class AgainstAStandInRelease(unittest.TestCase):
         self.assertIn(f"Commit: abc ({BRANCH})", said)
         self.assertIn(f"Folder: {self.folder}", said)
         self.assertNotIn("is not recognized", said)
+        self.assertNotIn("deleted", said)
         self.assertFalse(self.previous.exists())
         self.assertEqual(self.left_over(), [])
 
@@ -137,14 +138,47 @@ class AgainstAStandInRelease(unittest.TestCase):
         self.assertFalse((self.tmp / EXE).exists())
         self.assertEqual(sorted(p.name for p in self.tmp.iterdir()), sorted([self.folder.name, "site"]))
 
-    def test_an_old_exe_is_replaced_and_kept_as_previous(self):
+    def test_an_old_exe_is_replaced_and_deleted(self):
+        """User, 2026-11-27: "the bat should delete the old one automatically
+        after get the new one"."""
         self.exe.write_bytes(self.OLD)
         code, said = self.run_it()
         self.assertEqual(code, 0, said)
         self.assertEqual(self.exe.read_bytes(), self.NEW)
-        self.assertEqual(self.previous.read_bytes(), self.OLD)
-        self.assertIn(f"kept as {NAME}_previous.exe", said)
+        self.assertFalse(self.previous.exists())
+        self.assertIn("The old one is deleted.", said)
+        self.assertEqual(sorted(p.name for p in self.folder.iterdir()), sorted([SCRIPT.name, EXE, f"{NAME}_BUILD_INFO.txt"]))
+
+    def test_a_previous_exe_left_by_the_first_version_is_deleted_too(self):
+        """The first version of this file kept the old exe as
+        <name>_previous.exe: gone after an update, and also when the exe is
+        already the newest."""
+        self.exe.write_bytes(self.OLD)
+        self.previous.write_bytes(b"MZ older still")
+        code, said = self.run_it()
+        self.assertEqual(code, 0, said)
+        self.assertEqual(self.exe.read_bytes(), self.NEW)
+        self.assertFalse(self.previous.exists())
         self.assertEqual(self.left_over(), [])
+        self.previous.write_bytes(b"MZ older still")
+        code, said = self.run_it()
+        self.assertEqual(code, 0, said)
+        self.assertIn("UP TO DATE", said)
+        self.assertIn(f"The old {NAME}_previous.exe left by an earlier update is deleted.", said)
+        self.assertFalse(self.previous.exists())
+        self.assertEqual(self.exe.read_bytes(), self.NEW)
+
+    def test_nothing_is_deleted_when_the_update_fails(self):
+        """The old exe goes only after the new one is in place: a download
+        that does not match leaves it, and a previous one beside it."""
+        self.exe.write_bytes(self.OLD)
+        self.previous.write_bytes(b"MZ older still")
+        self.publish(self.NEW, sha="0" * 64)
+        code, said = self.run_it()
+        self.assertEqual(code, 1, said)
+        self.assertEqual(self.exe.read_bytes(), self.OLD)
+        self.assertEqual(self.previous.read_bytes(), b"MZ older still")
+        self.assertNotIn("deleted", said)
 
     def test_the_newest_exe_is_left_alone(self):
         self.exe.write_bytes(self.NEW)

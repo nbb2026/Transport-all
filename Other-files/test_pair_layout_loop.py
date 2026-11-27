@@ -209,7 +209,13 @@ class RTEStageBlockTests(Built, unittest.TestCase):
         place = block._rte_stage_place
         if place == "under params":
             self.assertGreaterEqual(block.winfo_rooty(), params.winfo_rooty() + params.winfo_height())
-            self.assertLess(block.winfo_rootx() + block.winfo_width(), lockins.winfo_rootx() + 1)
+            if getattr(block, "_rte_stage_one_row", False):
+                # In this program the block is one row under the parameters and the lock-ins where it fits
+                # (user, 2026-11-27: "shrink the two row in the figure to one row"; test_rt_measurement_tabs.py).
+                self.assertGreaterEqual(block.winfo_rooty(), lockins.winfo_rooty() + lockins.winfo_height())
+                self.assertLessEqual(block.winfo_rootx() + block.winfo_width(), body.winfo_rootx() + body.winfo_width())
+            else:
+                self.assertLess(block.winfo_rootx() + block.winfo_width(), lockins.winfo_rootx() + 1)
         else:
             self.assertEqual(place, "beside lock-ins")
             self.assertGreater(block.winfo_rootx(), lockins.winfo_rootx() + lockins.winfo_width())
@@ -292,7 +298,8 @@ class RTEStageBlockTests(Built, unittest.TestCase):
             reference.destroy()
         self.assertEqual((holder.winfo_reqwidth(), holder.winfo_reqheight()), size)
         self.assertIs(holder.master, panel.rte_stage_stop_button.master, "in the stage block, where it was")
-        self.assertEqual(holder.grid_info()["row"], 1)
+        # Row 1, under Stage °; row 0, right of Go to 0°, where the block is one row (user, 2026-11-27).
+        self.assertEqual(holder.grid_info()["row"], 0 if getattr(holder.master, "_rte_stage_one_row", False) else 1)
         try:
             panel.ppms_environment_busy = False
             panel._update_ppms_control_ui()

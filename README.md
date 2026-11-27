@@ -68,6 +68,12 @@ Scan box (user, 2026-11-27):
   harmonic. The read current and the SR830-1 harmonic go back to 1.5 mA and
   2 in the other tabs; either box keeps a value that was typed into it. The
   safety tick is never set by the program.
+- **PHE** opens as the user's second figure of 2026-11-27: Angle+Field from 0
+  to -360° in 5° steps, 1 loop, Settle s 0.5, Acquire s 5, no round trip,
+  outer field 200 G (one field), read current 1.5 mA RMS, SR830-1 on the 1st
+  harmonic and the only lock-in measured. Only the outer field and the
+  harmonic differ from SHHV, which shows the field list 200 to 1000 G and
+  harmonic 2; a typed value stays here too.
 - A measurement comes back on the scan it was left on. A scan that is also in
   the new measurement (Angle+Field in PHE and SHHV) keeps what was typed.
 - While a scan runs, or the page is busy, the measurement cannot be changed:
@@ -77,8 +83,11 @@ Scan box (user, 2026-11-27):
 - Everything else is the SHHV & Switch page of Transport-all: Set field, the
   stage controls, the pulse row, the files, run logs and start questions. The
   saved rows and the run's settings have one more entry, `measurement` (PHE,
-  AHE, NLH, SHHV or Switch-OOP); the `module` column and the results folder
-  still say SHHV.
+  AHE, NLH, SHHV or Switch-OOP); the `module` column still says SHHV.
+- A run whose file name is left blank is named after its measurement:
+  `PHE_<date>_<time>`, `AHE_…`, `NLH_…`, `SHHV_…`, `Switch-OOP_…` (the run
+  folder, its `.csv` and its `.log`). Save CSV as suggests the same name. A
+  typed name is used as typed.
 - In a wide window three things take one row instead of two: the scan note
   sits beside Round trip, the stage block (Stage °, Move, Stop, Go to 0°, Set
   stage 0°, the stage's line) is one row under the settings, and the supply's

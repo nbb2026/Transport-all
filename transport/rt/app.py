@@ -1907,7 +1907,10 @@ RTE_MEASUREMENTS = {
     "SHHV": ("Angle+Field", "Angle+Current"),
     "Switch-OOP": ("Switch", "Switch-loop", "Switch2"),
 }
-RTE_MEASUREMENT_START = {"Switch-OOP": dict(scan="Switch-loop", current_ma="0.5", harmonic_a="1")}
+RTE_MEASUREMENT_START = {
+    "PHE": dict(scan="Angle+Field", harmonic_a="1", angle_field_g="200"),
+    "Switch-OOP": dict(scan="Switch-loop", current_ma="0.5", harmonic_a="1"),
+}
 RTE_DEFAULT_MEASUREMENT = "SHHV"
 RTE_SCAN_BOX_FIRST = True
 RTE_PLOT_TITLE_TAIL = 'X, Y, phase vs measured field / excitation current / sample angle / pulse current'
@@ -14568,8 +14571,9 @@ class RTEPanel(PPMSPanel):
     def _rte_show_measurement_start(self, start):
         state = self.__dict__
         shown = state.setdefault('rte_measurement_shown', {})
-        for key, attr, base in (('current_ma', 'ppms_transport_current_var', f'{RTE_TRANSPORT_CURRENT_RMS_MA:g}'), ('harmonic_a', 'ppms_transport_harmonic_a_var', '2')):
-            variable, new, was = state.get(attr), str(start.get(key, base)), shown.get(key, base)
+        fields = (state.get('rte_outer_ranges') or {}).get('Angle+Field') or [None]
+        for key, variable, base in (('current_ma', state.get('ppms_transport_current_var'), f'{RTE_TRANSPORT_CURRENT_RMS_MA:g}'), ('harmonic_a', state.get('ppms_transport_harmonic_a_var'), '2'), ('angle_field_g', fields[0], RTE_OUTER_ROWS['Angle+Field']['defaults'][0])):
+            new, was = str(start.get(key, base)), shown.get(key, base)
             if variable is None or new == was or str(variable.get()).strip() != was:
                 continue
             variable.set(new)
@@ -15610,7 +15614,7 @@ class RTEPanel(PPMSPanel):
         typed = ask_scan_file_stem(self.root, f'{self.ppms_page_name} file name')
         if typed is None:
             return
-        stem = typed or time.strftime(f'{self.ppms_page_name}_%Y%m%d_%H%M%S')
+        stem = typed or time.strftime(f"{self.__dict__.get('rte_measurement') or self.ppms_page_name}_%Y%m%d_%H%M%S")
         try:
             run_settings = self._rte_run_settings(mode, plan, passes, settings, limit, field_current, stable, duration, pass_settles, settle_s, typed, outer=outer)
             run_settings['magnet_supply'] = self._rte_magnet_settings(supply, mode, ramp_rate, ramp_s)
@@ -16789,7 +16793,7 @@ class RTEPanel(PPMSPanel):
         folder = self.__dict__.get('rte_run_folder')
         where = {'initialdir': str(folder)} if folder is not None and Path(folder).is_dir() else {}
         path = filedialog.asksaveasfilename(parent=self.root, title=f'Save {self.ppms_page_name} CSV as',
-            defaultextension='.csv', filetypes=(('CSV', '*.csv'),), initialfile=time.strftime(f'{self.ppms_page_name}_%Y%m%d_%H%M%S.csv'),
+            defaultextension='.csv', filetypes=(('CSV', '*.csv'),), initialfile=time.strftime(f"{self.ppms_field_scan_rows[0].get('measurement') or self.ppms_page_name}_%Y%m%d_%H%M%S.csv"),
             **where)
         if not path:
             return

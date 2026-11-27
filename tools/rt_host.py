@@ -168,8 +168,9 @@ SOURCE_REPLACE = (
          '    def _rte_show_measurement_start(self, start):\n'
          '        state = self.__dict__\n'
          "        shown = state.setdefault('rte_measurement_shown', {})\n"
-         "        for key, attr, base in (('current_ma', 'ppms_transport_current_var', f'{RTE_TRANSPORT_CURRENT_RMS_MA:g}'), ('harmonic_a', 'ppms_transport_harmonic_a_var', '2')):\n"
-         '            variable, new, was = state.get(attr), str(start.get(key, base)), shown.get(key, base)\n'
+         "        fields = (state.get('rte_outer_ranges') or {}).get('Angle+Field') or [None]\n"
+         "        for key, variable, base in (('current_ma', state.get('ppms_transport_current_var'), f'{RTE_TRANSPORT_CURRENT_RMS_MA:g}'), ('harmonic_a', state.get('ppms_transport_harmonic_a_var'), '2'), ('angle_field_g', fields[0], RTE_OUTER_ROWS['Angle+Field']['defaults'][0])):\n"
+         '            new, was = str(start.get(key, base)), shown.get(key, base)\n'
          '            if variable is None or new == was or str(variable.get()).strip() != was:\n'
          '                continue\n'
          '            variable.set(new)\n'
@@ -274,6 +275,10 @@ SOURCE_REPLACE = (
      )),
     ("                    stage_box.grid_configure(in_=body, row=1, column=0, columnspan=1, sticky='nw', padx=0, pady=(4, 0))\n",
      "                    stage_box.grid_configure(in_=body, row=1, column=0, columnspan=2 if one_row else 1, sticky='nw', padx=0, pady=(4, 0))\n"),
+    ("        stem = typed or time.strftime(f'{self.ppms_page_name}_%Y%m%d_%H%M%S')\n",
+     "        stem = typed or time.strftime(f\"{self.__dict__.get('rte_measurement') or self.ppms_page_name}_%Y%m%d_%H%M%S\")\n"),
+    ("initialfile=time.strftime(f'{self.ppms_page_name}_%Y%m%d_%H%M%S.csv'),",
+     "initialfile=time.strftime(f\"{self.ppms_field_scan_rows[0].get('measurement') or self.ppms_page_name}_%Y%m%d_%H%M%S.csv\"),"),
 )
 
 MAIN_WINDOW_TITLE = "Transport_RT_NH"
@@ -301,7 +306,14 @@ RTE_SCAN_BOX_FIRST = True
 # The scan a measurement opens on the first time, and the read current and SR830-1 harmonic shown while it is
 # chosen: these two boxes follow the measurement only while they still hold what the program put there, so a
 # typed value stays (the rule of Acquire s); the other measurements show 1.5 mA and harmonic 2 as before.
-RTE_MEASUREMENT_START = {"Switch-OOP": dict(scan="Switch-loop", current_ma="0.5", harmonic_a="1")}
+# PHE (user's figure, 2026-11-27: "default setting as the figure for PHE module"): Angle+Field 0 to -360 in 5,
+# 0.5 s settle, 5 s acquire, 1.5 mA were the scan's already; its own are one outer field of 200 G (angle_field_g:
+# the Angle+Field list box, by the same typed-value rule; SHHV shows the list 200 to 1000 G) and SR830-1 on the
+# 1st harmonic.
+RTE_MEASUREMENT_START = {
+    "PHE": dict(scan="Angle+Field", harmonic_a="1", angle_field_g="200"),
+    "Switch-OOP": dict(scan="Switch-loop", current_ma="0.5", harmonic_a="1"),
+}
 SWITCH_LOOP_DEFAULT_RANGE = ("22", "-22", "2")
 SWITCH_LOOP_DEFAULT_FIELDS_G = "200"
 # The live lines' width, in characters, beside the instrument rows of a wide window (32 beside the rack, where a

@@ -128,7 +128,8 @@ class ThePage(unittest.TestCase):
 
     def test_nothing_else_follows_the_measurement(self):
         """ "the others remain the same": the read current, the harmonics and
-        which lock-ins are measured are not the measurement's to change."""
+        which lock-ins are measured are not the measurement's to change
+        (PHE and Switch-OOP have start-up values of their own since: below)."""
         panel = self.page()
 
         def settings():
@@ -138,7 +139,7 @@ class ThePage(unittest.TestCase):
                     panel.zurich_harmonic.get(), {key: v.get() for key, v in panel.ppms_lockin_selection.items()},
                     panel.ppms_page_name, {c.owner_scope for c in panel.rte_controllers.values()})
         before = settings()
-        for name in ("PHE", "NLH", "SHHV"):
+        for name in ("AHE", "NLH", "SHHV"):
             panel.rte_set_measurement(name)
             self.assertEqual(settings(), before, name)
 
@@ -169,14 +170,59 @@ class ThePage(unittest.TestCase):
         plan = [v for _l, _p, v in app.rte_scan_plan("Switch-loop", "22", "-22", "2", 1, True)]
         self.assertEqual((plan[0], plan[22], plan[-1], len(plan)), (22.0, -22.0, 22.0, 45))
 
+    def test_the_phe_tab_starts_as_the_users_figure(self):
+        """User's figure, 2026-11-27 ("default setting as the figure for PHE
+        module"): Angle+Field 0 to -360 in 5, 1 loop, Settle s 0.5, Acquire s
+        5, no round trip, Outer field G 200; 1.5 mA RMS at 317.3 Hz, 100 V;
+        SR830-1 on the 1st harmonic and the only one measured."""
+        panel = self.page()
+        panel.rte_set_measurement("PHE")
+        self.assertEqual((panel.ppms_simple_mode.get(), [v.get() for v in panel.ppms_simple_range], str(panel.ppms_field_scan_loop_var.get()),
+                          panel.ppms_field_scan_stable_var.get(), panel.ppms_acquisition_time_var.get(), panel.rte_round_trip.get(),
+                          panel.rte_outer_ranges["Angle+Field"][0].get()),
+                         ("Angle+Field", ["0", "-360", "5"], "1", "0.5", "5", False, "200"))
+        self.assertEqual((panel.ppms_transport_current_var.get(), panel.ppms_transport_frequency_var.get(),
+                          panel.ppms_transport_compliance_var.get()), ("1.5", "317.3", "100"))
+        self.assertEqual((panel.ppms_transport_harmonic_a_var.get(), panel.ppms_transport_harmonic_b_var.get(),
+                          panel.ppms_transport_harmonic_c_var.get()), ("1", "2", "3"))
+        self.assertEqual({key: v.get() for key, v in panel.ppms_lockin_selection.items()},
+                         {"830_a": True, "830_b": False, "830_c": False, "zurich": False})
+        self.assertEqual((panel.rte_pulse_current_ma.get(), panel.rte_pulse_width_us.get(), panel.rte_pulse_count.get()), ("10", "1000", "1"))
+        self.assertFalse(panel.ppms_control_safety_var.get())
+        # One field: one turn of 73 angles.
+        self.assertEqual(list(app.rte_outer_list_plan(panel.rte_outer_ranges["Angle+Field"][0].get())), [200.0])
+
+    def test_phes_field_and_harmonic_go_back_with_shhv_and_a_typed_one_stays(self):
+        fields = app.RTE_OUTER_ROWS["Angle+Field"]["defaults"][0]
+        panel = self.page()
+        box = panel.rte_outer_ranges["Angle+Field"][0]
+        self.assertEqual((box.get(), panel.ppms_transport_harmonic_a_var.get()), (fields, "2"))
+        panel.rte_set_measurement("PHE")
+        self.assertEqual((box.get(), panel.ppms_transport_harmonic_a_var.get()), ("200", "1"))
+        panel.rte_set_measurement("SHHV")
+        self.assertEqual((box.get(), panel.ppms_transport_harmonic_a_var.get()), (fields, "2"))
+        # Typed in PHE: kept in SHHV, and on the way back.
+        panel.rte_set_measurement("PHE")
+        box.set("350, 700")
+        panel.rte_set_measurement("SHHV")
+        self.assertEqual(box.get(), "350, 700")
+        panel.rte_set_measurement("PHE")
+        self.assertEqual(box.get(), "350, 700")
+        # Typed in SHHV: PHE does not replace it.
+        panel = self.page()
+        box = panel.rte_outer_ranges["Angle+Field"][0]
+        box.set("500")
+        panel.rte_set_measurement("PHE")
+        self.assertEqual((box.get(), panel.ppms_transport_harmonic_a_var.get()), ("500", "1"))
+
     def test_the_read_current_and_harmonic_go_back_with_the_other_measurements(self):
         panel = self.page()
         self.assertEqual((panel.ppms_transport_current_var.get(), panel.ppms_transport_harmonic_a_var.get()), ("1.5", "2"))
         panel.rte_set_measurement("Switch-OOP")
         self.assertEqual((panel.ppms_transport_current_var.get(), panel.ppms_transport_harmonic_a_var.get()), ("0.5", "1"))
-        for name in ("SHHV", "AHE", "PHE", "NLH"):
+        for name, harmonic in (("SHHV", "2"), ("AHE", "2"), ("PHE", "1"), ("NLH", "2")):
             panel.rte_set_measurement(name)
-            self.assertEqual((panel.ppms_transport_current_var.get(), panel.ppms_transport_harmonic_a_var.get()), ("1.5", "2"), name)
+            self.assertEqual((panel.ppms_transport_current_var.get(), panel.ppms_transport_harmonic_a_var.get()), ("1.5", harmonic), name)
         panel.rte_set_measurement("Switch-OOP")
         self.assertEqual((panel.ppms_transport_current_var.get(), panel.ppms_transport_harmonic_a_var.get()), ("0.5", "1"))
 
@@ -205,9 +251,12 @@ class ThePage(unittest.TestCase):
         panel._ppms_apply_selected_harmonic = asked.append
         panel.rte_set_measurement("Switch-OOP")
         self.assertEqual(asked, ["830_a"])
+        # PHE is on the 1st harmonic too: nothing to send.
         panel.rte_set_measurement("PHE")
-        self.assertEqual(asked, ["830_a", "830_a"])
+        self.assertEqual(asked, ["830_a"])
         panel.rte_set_measurement("SHHV")
+        self.assertEqual(asked, ["830_a", "830_a"])
+        panel.rte_set_measurement("AHE")
         self.assertEqual(asked, ["830_a", "830_a"])
 
     def test_the_other_switch_scans_keep_their_own_values(self):
@@ -242,6 +291,49 @@ class SavedWithTheScan(ete.EndToEnd):
         prepared = next(json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()
                         if '"run_prepared"' in line)
         self.assertIn('"measurement": "SHHV"', json.dumps(prepared))
+
+    def in_phe(self):
+        """The harness's page moved to PHE, on the harness's own short Angle
+        scan again (the move puts PHE's first scan in the list)."""
+        h = self.make()
+        panel = h.panel
+        self.assertTrue(panel.rte_set_measurement("PHE"))
+        panel.ppms_simple_mode.set("Angle")
+        panel._rte_mode_changed()
+        for variable, value in zip(panel.ppms_simple_range, ("0", "10", "10")):
+            variable.set(value)
+        panel.rte_round_trip.set(False)
+        return h
+
+    def test_a_blank_file_name_is_the_measurements_name_date_and_time(self):
+        """User, 2026-11-27: "change the default saved files' name
+        corresponding to its children module name": PHE_<date>_<time> and so
+        on, where every tab's run was SHHV_<date>_<time>."""
+        h = self.in_phe()
+        with patch.object(app.simpledialog, "askstring", return_value=""):
+            self.start(h)
+        self.assertEqual(h.showerror.call_args_list, [])
+        folder = h.panel.rte_run_folder
+        self.assertRegex(folder.name, r"^PHE_\d{8}_\d{6}$")
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), [f"{folder.name}.csv", f"{folder.name}.log"])
+        self.assertEqual({row["measurement"] for row in self.rows(h)}, {"PHE"})
+        # Save CSV as: the name of the measurement the rows were taken in,
+        # also from another tab.
+        self.assertTrue(h.panel.rte_set_measurement("SHHV"))
+        with patch.object(app.filedialog, "asksaveasfilename", return_value="") as ask:
+            h.panel.save_ppms_field_scan_csv()
+        self.assertRegex(ask.call_args.kwargs["initialfile"], r"^PHE_\d{8}_\d{6}\.csv$")
+
+    def test_a_typed_file_name_is_kept_in_every_measurement(self):
+        h = self.in_phe()
+        self.start(h)
+        self.assertEqual(h.showerror.call_args_list, [])
+        self.assertEqual(h.panel.rte_run_folder.name, "angle")
+
+    def test_every_measurements_name_is_a_valid_file_name(self):
+        for name in app.RTE_MEASUREMENTS:
+            stem = f"{name}_20261127_120000"
+            self.assertEqual(app.scan_file_stem(stem), stem)
 
 
 if __name__ == "__main__":

@@ -152,10 +152,13 @@ jobs:
             Stop-Process -Name Transport_MOKE -Force
             Start-Sleep -Seconds 3
           }
+      - name: The lab computer's updater goes with the release
+        run: Copy-Item Update_Transport_MOKE.bat dist/Update_Transport_MOKE.bat
       - uses: actions/upload-artifact@v4
         with:
           name: Transport_MOKE-windows-x64
           path: |
+            dist/Update_Transport_MOKE.bat
             dist/Transport_MOKE.exe
             dist/Transport_MOKE.exe.sha256
             dist/Transport_MOKE-folder.zip
@@ -232,12 +235,17 @@ jobs:
           \`Transport_MOKE\\Transport_MOKE.exe\` inside; keep the \`_internal\` folder beside it.
           SHA-256 of the zip: \`$zip_sha256\`
 
+          \`Update_Transport_MOKE.bat\`: for the computer the program is used on. Put it in the folder the
+          .exe is kept in and double-click it: it downloads the newest \`Transport_MOKE.exe\` into that folder
+          (checked against its SHA-256; never while the program is running; the old one is kept as
+          \`Transport_MOKE_previous.exe\`).
+
           The "Source code" files below are GitHub's snapshot of the tag \`$RELEASE_TAG\`
           (commit ${tag_commit:0:7}), which does not move; the .exe is from the commit above.
           EOF
           gh release upload "$RELEASE_TAG" dist/Transport_MOKE.exe dist/Transport_MOKE.exe.sha256 \
             dist/Transport_MOKE-folder.zip dist/Transport_MOKE-folder.zip.sha256 dist/BUILD_INFO.txt \
-            --clobber --repo "$GITHUB_REPOSITORY"
+            dist/Update_Transport_MOKE.bat --clobber --repo "$GITHUB_REPOSITORY"
           gh release edit "$RELEASE_TAG" --title "$title" --notes-file notes.md --repo "$GITHUB_REPOSITORY"
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
             --jq '.assets[] | "\(.name)  \(.size) bytes"'

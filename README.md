@@ -14,7 +14,7 @@ No Python needed (Windows 10/11, 64-bit). Version 1.0 of each program:
 **Updater** (user, 2026-11-27): for the computer a program is used on. Put the `.bat` in the folder the
 `.exe` is kept in and double-click it: it downloads the newest `.exe` into that folder when the one there
 is not the newest. It checks the download against its SHA-256, never replaces a program that is running,
-and keeps the old one as `Transport_<X>_previous.exe`. Nothing is installed (it uses `curl`, `certutil`
+and deletes the old one once the new one is in place. Nothing is installed (it uses `curl`, `certutil`
 and `tasklist` of Windows 10/11). Windows may ask once whether to run a file from the internet: More
 info, Run anyway.
 

@@ -1,0 +1,3 @@
+# Kept byte for byte, with its CRLF line ends: cmd.exe needs them (labels and goto fail with LF alone),
+# also in a copy downloaded straight from GitHub.
+*.bat -text

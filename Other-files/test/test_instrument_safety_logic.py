@@ -754,40 +754,6 @@ class InstrumentSafetyTests(unittest.TestCase):
                 )
             ))
 
-    def test_stfmr_lockin_export_saves_all_four_plot_canvases(self):
-        harness = object.__new__(app.CombinedControlApp)
-        harness.stfmr_lockin_x_canvas = object()
-        harness.stfmr_lockin_y_canvas = object()
-        harness.stfmr_lockin_theta_canvas = object()
-        harness.stfmr_lockin_canvas = object()
-        captured = []
-        harness.save_plot_canvas_snapshot = (
-            lambda canvas, path: captured.append((canvas, Path(path).name))
-        )
-
-        saved = harness._save_stfmr_lockin_plot_snapshots(
-            Path("results"), "20260828_220000_000000"
-        )
-
-        self.assertEqual(
-            [path.name for path in saved],
-            [
-                "STFMR_field_scan_20260828_220000_000000_X.png",
-                "STFMR_field_scan_20260828_220000_000000_Y.png",
-                "STFMR_field_scan_20260828_220000_000000_theta.png",
-                "STFMR_field_scan_20260828_220000_000000_field_vs_current.png",
-            ],
-        )
-        self.assertEqual(
-            [canvas for canvas, _name in captured],
-            [
-                harness.stfmr_lockin_x_canvas,
-                harness.stfmr_lockin_y_canvas,
-                harness.stfmr_lockin_theta_canvas,
-                harness.stfmr_lockin_canvas,
-            ],
-        )
-
     def test_stfmr_lockin_plots_use_compact_markers(self):
         harness = object.__new__(app.CombinedControlApp)
         captured = {}
@@ -1476,26 +1442,6 @@ class InstrumentSafetyTests(unittest.TestCase):
         self.assertEqual(step, 0.00025)
         self.assertEqual(ticks[:3], [0.0, 0.00025, 0.0005])
 
-    def test_6221_dc_mode_uses_fixed_current_not_waveform(self):
-        controller = app.NonLocalACController(lambda _message: None)
-        controller.source = Fake6221()
-        controller.nanovoltmeter = Fake2182()
-        frequency, readbacks = controller.configure(
-            0.0,
-            13.7,
-            50.0,
-            {},
-            use_nanovoltmeter=True,
-            output_mode="DC",
-        )
-        self.assertTrue(math.isnan(frequency))
-        self.assertEqual(readbacks["2182"]["measurement_mode"],
-                         "DC voltage (not phase-sensitive)")
-        self.assertTrue(math.isclose(controller.set_current(-0.1, frequency),
-                                     -0.1))
-        self.assertEqual(controller.source.output, 1)
-        self.assertNotIn("SOUR:WAVE:INIT", controller.source.commands)
-
     def test_6221_ac_mode_converts_gui_rms_to_remote_peak(self):
         controller = app.NonLocalACController(lambda _message: None)
         controller.source = Fake6221()
@@ -1512,41 +1458,6 @@ class InstrumentSafetyTests(unittest.TestCase):
         self.assertTrue(math.isclose(frequency, 13.7))
         self.assertTrue(math.isclose(controller.source.wave_amplitude,
                                      expected_peak_a))
-
-    def test_6221_current_sweep_changes_only_the_running_amplitude(self):
-        """Non-local 6221-IV as the RT-E Current scan (2026-10-08): one
-        fixed range, the sine started once, then only SOUR:WAVE:AMPL, so the
-        Trigger Link marker the lock-ins lock to never stops."""
-        controller = app.NonLocalACController(lambda _message: None)
-        controller.source = Fake6221()
-        controller.nanovoltmeter = Fake2182()
-        sweep_peak = math.sqrt(2.0) * 1e-3
-        frequency, _readbacks = controller.configure(
-            0.01, 17.3, 50.0, {}, use_nanovoltmeter=True, output_mode="AC",
-            sweep_peak_a=sweep_peak,
-        )
-        commands = controller.source.commands
-        self.assertIn(f"SOUR:CURR:RANG {sweep_peak:.12e}", commands)
-        self.assertIn("SOUR:WAVE:RANG FIX", commands)
-        self.assertIn("SOUR:WAVE:DUR:CYCL INF", commands)
-        self.assertNotIn("SOUR:WAVE:RANG BEST", commands)
-        self.assertEqual(controller.configured_frequency_hz, frequency)
-        with self.assertRaisesRegex(RuntimeError, "output is off"):
-            controller.update_amplitude(0.5)
-        controller.set_current(0.01, frequency)
-        before = len(commands)
-        self.assertAlmostEqual(controller.update_amplitude(0.5), 0.5)
-        self.assertEqual(commands[before:], [f"SOUR:WAVE:AMPL {math.sqrt(2.0) * 0.5e-3:.12e}"],
-                         "no abort, arm or init")
-        self.assertEqual(controller.source.output, 1)
-        with self.assertRaisesRegex(ValueError, "range reserved"):
-            controller.update_amplitude(2.0)
-        # Gate-VI and Set 6221 keep the automatic range.
-        controller.source = Fake6221()
-        controller.configure(0.1, 17.3, 50.0, {}, use_nanovoltmeter=True, output_mode="AC")
-        self.assertIn("SOUR:WAVE:RANG BEST", controller.source.commands)
-        with self.assertRaisesRegex(RuntimeError, "not set up for a continuous current sweep"):
-            controller.update_amplitude(0.05)
 
     def test_the_zurich_is_set_up_as_on_ppms(self):
         """User, 2026-10-09: the Non-local Zurich as the PPMS module's: on

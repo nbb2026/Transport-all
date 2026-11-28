@@ -116,6 +116,10 @@ class TheTabs(unittest.TestCase):
     def test_6_one_row_where_there_were_two_in_a_wide_window(self):
         panel = self.a.rte_panel
         self.choose("Switch-OOP")
+        # The figure was of the Switch-loop scan; the tab opens on the Switch scan since 2026-11-28, whose
+        # states' table stands where the note would go.
+        panel.ppms_simple_mode.set("Switch-loop")
+        panel._rte_mode_changed()
         self.root.geometry("2400x1300+0+0")
         for _ in range(8):
             self.root.update()

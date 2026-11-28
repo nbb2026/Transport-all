@@ -61,6 +61,14 @@ class ThePage(unittest.TestCase):
         self.addCleanup(guard.stop)
         return ete.build_page(kepco=False)
 
+    @staticmethod
+    def loop_in_oop(panel):
+        """Switch-OOP with Switch-loop chosen in its list, as the user does: the tab opens on the Switch scan
+        since 2026-11-28, and comes back on the scan it was left on."""
+        panel.rte_set_measurement("Switch-OOP")
+        panel.ppms_simple_mode.set("Switch-loop")
+        panel._rte_mode_changed()
+
     def test_it_starts_on_shhv_with_shhvs_scans_and_the_start_up_scan(self):
         panel = self.page()
         self.assertEqual(panel.rte_measurement, "SHHV")
@@ -69,14 +77,14 @@ class ThePage(unittest.TestCase):
         self.assertTrue(str(panel.ppms_plot_frame.options["text"]).startswith("SHHV: X, Y, phase vs"))
 
     def test_each_measurement_offers_its_scans_and_starts_on_its_first(self):
-        """Switch-OOP opens on Switch-loop, the scan of the user's figure; the
-        list keeps its order (Switch, Switch-loop, Switch2)."""
+        """Switch-OOP opens on Switch, the scan of the user's figure of
+        2026-11-28 (Switch-loop before); Switch-IP on Switch-loop."""
         panel = self.page()
         for name in ("Switch-OOP", "NLH", "AHE", "PHE", "SHHV"):
             self.assertTrue(panel.rte_set_measurement(name))
             self.assertEqual(panel.rte_measurement, name)
             self.assertEqual(tuple(panel.rte_scan_mode_combo.options["values"]), MEASUREMENTS[name])
-            self.assertEqual(panel.ppms_simple_mode.get(), "Switch-loop" if name == "Switch-OOP" else MEASUREMENTS[name][0])
+            self.assertEqual(panel.ppms_simple_mode.get(), MEASUREMENTS[name][0])
             self.assertTrue(str(panel.ppms_plot_frame.options["text"]).startswith(f"{name}: X, Y, phase vs"))
 
     def test_a_new_scan_is_set_up_as_choosing_it_in_the_list_does(self):
@@ -89,7 +97,8 @@ class ThePage(unittest.TestCase):
         self.assertEqual([v.get() for v in panel.ppms_simple_range], ["0.01", "1", "0.01"])
         self.assertEqual(panel.rte_scan_units.get(), "6221 mA RMS")
         panel.rte_set_measurement("Switch-OOP")
-        self.assertEqual({w.grid_removed for w in panel.rte_pulse_widgets}, {False})
+        self.assertEqual([w.grid_removed for w in panel.rte_pulse_widgets], [False, True, True, False, False], "Switch: the width is each state's")
+        self.assertFalse(panel.rte_states_frame.grid_removed)
 
     def test_a_measurement_keeps_the_scan_it_was_left_on(self):
         panel = self.page()
@@ -163,7 +172,7 @@ class ThePage(unittest.TestCase):
         pulse; read current 0.5 mA RMS at 317.3 Hz, compliance 100 V, SR830-1
         on the 1st harmonic and measured."""
         panel = self.page()
-        panel.rte_set_measurement("Switch-OOP")
+        self.loop_in_oop(panel)
         self.assertEqual(self.shown(panel), ("Switch-loop", ["24", "-24", "2"], "1", "10", "10", True, "500", "1000", "1",
                                              "0.5", "317.3", "100", "1"))
         self.assertEqual({key: v.get() for key, v in panel.ppms_lockin_selection.items()},
@@ -176,6 +185,48 @@ class ThePage(unittest.TestCase):
         # The plan: 24 down to -24 and back, 49 pulses.
         plan = [v for _l, _p, v in app.rte_scan_plan("Switch-loop", "24", "-24", "2", 1, True)]
         self.assertEqual((plan[0], plan[24], plan[-1], len(plan)), (24.0, -24.0, 24.0, 49))
+
+    def test_the_switch_oop_tab_opens_on_the_switch_scan_with_the_figures_states(self):
+        """User's figure, 2026-11-28 ("Switch-OOP default use the figure's settings"): the Switch scan, States 4,
+        -360 deg / 1000 G / 0 mA, -270 / 200 / -10, -270 / 200 / 10, -360 / -1000 / 0, 50 us each; Settle s 10,
+        Acquire s 10, Cycles 1, Pulses 1.  The other tabs show the table's own start-up states, a typed cell
+        stays, and the tab's Switch-loop values are as they were."""
+        figure = [["-360", "1000", "0", "50"], ["-270", "200", "-10", "50"], ["-270", "200", "10", "50"], ["-360", "-1000", "0", "50"]]
+        own = [list(row) for row in app.SWITCH_DEFAULT_STATES]
+        panel = self.page()
+
+        def table():
+            return [[v.get() for v in row] for row in panel.rte_state_vars[:4]]
+        self.assertEqual(table(), own)
+        panel.rte_set_measurement("Switch-OOP")
+        self.assertEqual((panel.ppms_simple_mode.get(), panel.rte_states_count.get(), table()), ("Switch", "4", figure))
+        self.assertEqual((panel.ppms_field_scan_stable_var.get(), panel.ppms_acquisition_time_var.get(), str(panel.ppms_field_scan_loop_var.get()),
+                          panel.rte_pulse_count.get(), panel.ppms_transport_current_var.get(), panel.ppms_transport_harmonic_a_var.get()),
+                         ("10", "10", "1", "1", "0.5", "1"))
+        self.assertEqual([[v.get() for v in row] for row in panel.rte_state_vars[4:6]], [[""] * 4] * 2)
+        self.assertFalse(panel.ppms_control_safety_var.get(), "the safety tick is the user's to make")
+        # The states are ones the scan takes: they parse, and the stage turns (every state has an angle).
+        states = app.rte_switch_states(table(), "4")
+        self.assertEqual([(s["angle_deg"], s["field_g"], s["pulse_ma"], round(s["width_s"] * 1e6, 6)) for s in states],
+                         [(-360.0, 1000.0, 0.0, 50.0), (-270.0, 200.0, -10.0, 50.0), (-270.0, 200.0, 10.0, 50.0), (-360.0, -1000.0, 0.0, 50.0)])
+        # Switch-IP and the other tabs: the table's own states (30 us on Switch-IP); back: the figure's again.
+        panel.rte_set_measurement("Switch-IP")
+        self.assertEqual(table(), [[*row[:3], "30"] for row in own])
+        panel.rte_set_measurement("SHHV")
+        self.assertEqual(table(), own)
+        panel.rte_set_measurement("Switch-OOP")
+        self.assertEqual((panel.ppms_simple_mode.get(), table()), ("Switch", figure))
+        # A typed cell stays in every tab; the cells beside it still follow.
+        panel.rte_state_vars[1][1].set("350")
+        panel.rte_state_vars[2][3].set("80")
+        panel.rte_set_measurement("Switch-IP")
+        self.assertEqual(table(), [["0", "500", "20", "30"], ["0", "350", "-20", "30"], ["90", "500", "20", "80"], ["90", "500", "-20", "30"]])
+        panel.rte_set_measurement("Switch-OOP")
+        self.assertEqual(table(), [figure[0], ["-270", "350", "-10", "50"], ["-270", "200", "10", "80"], figure[3]])
+        # Switch-loop in this tab keeps the figure of the morning.
+        panel.ppms_simple_mode.set("Switch-loop")
+        panel._rte_mode_changed()
+        self.assertEqual(([v.get() for v in panel.ppms_simple_range], panel.rte_outer_ranges["Switch-loop"][0].get()), (["24", "-24", "2"], "500"))
 
     def test_the_phe_tab_starts_as_the_users_figure(self):
         """User's figure, 2026-11-27 ("default setting as the figure for PHE
@@ -303,7 +354,7 @@ class ThePage(unittest.TestCase):
         default 30us. the other settings are the same as Switch-OOP"."""
         self.assertEqual(app.RTE_MEASUREMENTS["Switch-IP"], app.RTE_MEASUREMENTS["Switch-OOP"])
         panel = self.page()
-        panel.rte_set_measurement("Switch-OOP")
+        self.loop_in_oop(panel)
         oop = self.shown(panel)
         panel = self.page()
         panel.rte_set_measurement("Switch-IP")
@@ -325,6 +376,7 @@ class ThePage(unittest.TestCase):
 
         def three():
             return ([v.get() for v in panel.ppms_simple_range], panel.rte_pulse_width_us.get(), panel.ppms_transport_harmonic_a_var.get())
+        self.loop_in_oop(panel)
         for name, expected in (("Switch-OOP", (["24", "-24", "2"], "1000", "1")), ("Switch-IP", (["14", "-14", "2"], "30", "2")),
                                ("Switch-OOP", (["24", "-24", "2"], "1000", "1")), ("Switch-IP", (["14", "-14", "2"], "30", "2"))):
             panel.rte_set_measurement(name)
@@ -343,7 +395,7 @@ class ThePage(unittest.TestCase):
 
     def test_a_typed_loop_or_pulse_width_stays_between_the_two_switch_tabs(self):
         panel = self.page()
-        panel.rte_set_measurement("Switch-OOP")
+        self.loop_in_oop(panel)
         for variable, value in zip(panel.ppms_simple_range, ("18", "-18", "1")):
             variable.set(value)
         panel.rte_pulse_width_us.set("500")
@@ -353,24 +405,22 @@ class ThePage(unittest.TestCase):
         self.assertEqual(([v.get() for v in panel.ppms_simple_range], panel.rte_pulse_width_us.get()), (["18", "-18", "1"], "500"))
 
     def test_the_states_pulse_widths_follow_the_tab_as_the_pulse_us_box_does(self):
-        """The Switch scan's states (user, 2026-11-28) start with 1000 us; on Switch-IP, whose pulses are 30 us
-        (user, 2026-11-27), a 1000 us pulse would be 33 times the one expected, so the states' widths follow
-        the tab while they still hold what the program put there.  A typed width, and a row not typed yet, stay."""
+        """The table's own states start with 1000 us; on Switch-IP, whose pulses are 30 us (user, 2026-11-27), a
+        1000 us pulse would be 33 times the one expected, so their widths follow the tab while they still hold
+        what the program put there.  A typed width, and a row not typed yet, stay."""
         panel = self.page()
         self.assertEqual({row[3] for row in app.SWITCH_DEFAULT_STATES}, {f"{app.SWITCH_DEFAULT_PULSE_WIDTH_US:g}"})
 
         def widths():
             return [row[3].get() for row in panel.rte_state_vars[:5]]
         self.assertEqual(widths(), ["1000"] * 4 + [""])
-        panel.rte_set_measurement("Switch-OOP")
-        self.assertEqual(widths(), ["1000"] * 4 + [""])
         panel.rte_state_vars[1][3].set("200")
         panel.rte_set_measurement("Switch-IP")
         self.assertEqual(widths(), ["30", "200", "30", "30", ""])
         panel.rte_set_measurement("SHHV")
         self.assertEqual(widths(), ["1000", "200", "1000", "1000", ""])
-        # Nothing else of a state follows the tab.
-        self.assertEqual([[v.get() for v in row[:3]] for row in panel.rte_state_vars[:4]], [list(row[:3]) for row in app.SWITCH_DEFAULT_STATES])
+        panel.rte_set_measurement("Switch-OOP")
+        self.assertEqual(widths(), ["50", "200", "50", "50", ""])
 
     def test_settle_acquire_and_the_field_follow_between_the_two_switch_tabs(self):
         """Switch-OOP's Switch-loop shows Settle s 10, Acquire s 10 and 500 G (user's figure, 2026-11-28);
@@ -379,6 +429,7 @@ class ThePage(unittest.TestCase):
 
         def three():
             return (panel.ppms_field_scan_stable_var.get(), panel.ppms_acquisition_time_var.get(), panel.rte_outer_ranges["Switch-loop"][0].get())
+        self.loop_in_oop(panel)
         for name, expected in (("Switch-OOP", ("10", "10", "500")), ("Switch-IP", ("30", "30", "200")), ("Switch-OOP", ("10", "10", "500")),
                                ("Switch-IP", ("30", "30", "200"))):
             panel.rte_set_measurement(name)
@@ -399,7 +450,7 @@ class ThePage(unittest.TestCase):
 
     def test_typed_times_and_a_typed_field_stay_between_the_two_switch_tabs(self):
         panel = self.page()
-        panel.rte_set_measurement("Switch-OOP")
+        self.loop_in_oop(panel)
         panel.ppms_field_scan_stable_var.set("15")
         panel.ppms_acquisition_time_var.set("20")
         panel.rte_outer_ranges["Switch-loop"][0].set("350")

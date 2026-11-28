@@ -1872,8 +1872,9 @@ RTE_MEASUREMENTS = {
 RTE_MEASUREMENT_START = {
     "PHE": dict(scan="Angle+Field", harmonic_a="1", angle_field_g="200"),
     "AHE": dict(scan="Field", current_ma="0.5", harmonic_a="1", ranges={"Field": ("-3", "3", "0.1")}),
-    "Switch-OOP": dict(scan="Switch-loop", current_ma="0.5", harmonic_a="1", ranges={"Switch-loop": ("24", "-24", "2")},
-                       settle_s={"Switch-loop": "10"}, acquire_s={"Switch-loop": "10"}, loop_field_g="500"),
+    "Switch-OOP": dict(scan="Switch", current_ma="0.5", harmonic_a="1", ranges={"Switch-loop": ("24", "-24", "2")},
+                       settle_s={"Switch-loop": "10"}, acquire_s={"Switch-loop": "10"}, loop_field_g="500",
+                       states=(("-360", "1000", "0", "50"), ("-270", "200", "-10", "50"), ("-270", "200", "10", "50"), ("-360", "-1000", "0", "50"))),
     "Switch-IP": dict(scan="Switch-loop", current_ma="0.5", harmonic_a="2", ranges={"Switch-loop": ("14", "-14", "2")}, pulse_width_us="30"),
 }
 RTE_DEFAULT_MEASUREMENT = "SHHV"
@@ -9670,12 +9671,17 @@ class RTEPanel(PPMSPanel):
             shown[key] = new
             if key == 'harmonic_a':
                 self._ppms_apply_selected_harmonic('830_a')
-        own, base = str(start.get('pulse_width_us', f'{SWITCH_DEFAULT_PULSE_WIDTH_US:g}')), f'{SWITCH_DEFAULT_PULSE_WIDTH_US:g}'
-        for number, variables in enumerate(state.get('rte_state_vars') or (), 1):
-            was = shown.get(f'state_{number}_width_us', base)
-            if own != was and str(variables[3].get()).strip() == was:
-                variables[3].set(own)
-                shown[f'state_{number}_width_us'] = own
+        own, cells = start.get('states') or (), [('states_count', state.get('rte_states_count'), str(len(SWITCH_DEFAULT_STATES)), str(len(start.get('states') or SWITCH_DEFAULT_STATES)))]
+        for index, variables in enumerate(state.get('rte_state_vars') or ()):
+            base = SWITCH_DEFAULT_STATES[index] if index < len(SWITCH_DEFAULT_STATES) else ('',) * len(variables)
+            new = own[index] if index < len(own) else (*base[:3], str(start.get('pulse_width_us', base[3]))) if base[3] and not own else base
+            cells += [(f'state_{index + 1}_{column}', variable, base[column], str(new[column])) for column, variable in enumerate(variables)]
+        for key, variable, base, new in cells:
+            was = shown.get(key, base)
+            if variable is not None and new != was and str(variable.get()).strip() == was:
+                variable.set(new)
+                shown[key] = new
+        self._rte_show_state_rows()
     def _rte_run_name(self) -> str:
         return self.__dict__.get('rte_measurement') or self.ppms_page_name
     def _append_ppms_live_csv(self, row):

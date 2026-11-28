@@ -194,12 +194,17 @@ SOURCE_REPLACE = (
          '            shown[key] = new\n'
          "            if key == 'harmonic_a':\n"
          "                self._ppms_apply_selected_harmonic('830_a')\n"
-         "        own, base = str(start.get('pulse_width_us', f'{SWITCH_DEFAULT_PULSE_WIDTH_US:g}')), f'{SWITCH_DEFAULT_PULSE_WIDTH_US:g}'\n"
-         "        for number, variables in enumerate(state.get('rte_state_vars') or (), 1):\n"
-         "            was = shown.get(f'state_{number}_width_us', base)\n"
-         '            if own != was and str(variables[3].get()).strip() == was:\n'
-         '                variables[3].set(own)\n'
-         "                shown[f'state_{number}_width_us'] = own\n"
+         "        own, cells = start.get('states') or (), [('states_count', state.get('rte_states_count'), str(len(SWITCH_DEFAULT_STATES)), str(len(start.get('states') or SWITCH_DEFAULT_STATES)))]\n"
+         "        for index, variables in enumerate(state.get('rte_state_vars') or ()):\n"
+         "            base = SWITCH_DEFAULT_STATES[index] if index < len(SWITCH_DEFAULT_STATES) else ('',) * len(variables)\n"
+         "            new = own[index] if index < len(own) else (*base[:3], str(start.get('pulse_width_us', base[3]))) if base[3] and not own else base\n"
+         "            cells += [(f'state_{index + 1}_{column}', variable, base[column], str(new[column])) for column, variable in enumerate(variables)]\n"
+         '        for key, variable, base, new in cells:\n'
+         '            was = shown.get(key, base)\n'
+         '            if variable is not None and new != was and str(variable.get()).strip() == was:\n'
+         '                variable.set(new)\n'
+         '                shown[key] = new\n'
+         '        self._rte_show_state_rows()\n'
          '    def _rte_run_name(self) -> str:\n'
          "        return self.__dict__.get('rte_measurement') or self.ppms_page_name\n"
          '    def _append_ppms_live_csv(self, row):\n'
@@ -732,11 +737,17 @@ RTE_SCAN_BOX_FIRST = True
 # 3 A in 0.1 A and back, a 0.5 mA RMS read current, SR830-1 on the 1st harmonic; Settle s 0.5, Acquire s 2 and
 # Round trip were the Field scan's already.  The figure shows the Field scan, so Field+Angle and Field+Current
 # keep the -1 to 1 A in 0.02 A of 2026-11-22.
+# Switch-OOP since 2026-11-28 (user's figure of the Switch scan: "Switch-OOP default use the figure's settings"): the
+# tab opens on the Switch scan, whose states are -360 deg / 1000 G / 0 mA, -270 deg / 200 G / -10 mA, -270 deg /
+# 200 G / 10 mA and -360 deg / -1000 G / 0 mA, 50 us each (states: what the table shows in this tab; a cell follows
+# the tab only while it holds what the program put there, and the other tabs show SWITCH_DEFAULT_STATES).  Settle s
+# 10, Acquire s 10, Cycles 1 and Pulses 1 were the scan's already.  The tab's Switch-loop values stay as they were.
 RTE_MEASUREMENT_START = {
     "PHE": dict(scan="Angle+Field", harmonic_a="1", angle_field_g="200"),
     "AHE": dict(scan="Field", current_ma="0.5", harmonic_a="1", ranges={"Field": ("-3", "3", "0.1")}),
-    "Switch-OOP": dict(scan="Switch-loop", current_ma="0.5", harmonic_a="1", ranges={"Switch-loop": ("24", "-24", "2")},
-                       settle_s={"Switch-loop": "10"}, acquire_s={"Switch-loop": "10"}, loop_field_g="500"),
+    "Switch-OOP": dict(scan="Switch", current_ma="0.5", harmonic_a="1", ranges={"Switch-loop": ("24", "-24", "2")},
+                       settle_s={"Switch-loop": "10"}, acquire_s={"Switch-loop": "10"}, loop_field_g="500",
+                       states=(("-360", "1000", "0", "50"), ("-270", "200", "-10", "50"), ("-270", "200", "10", "50"), ("-360", "-1000", "0", "50"))),
     "Switch-IP": dict(scan="Switch-loop", current_ma="0.5", harmonic_a="2", ranges={"Switch-loop": ("14", "-14", "2")}, pulse_width_us="30"),
 }
 SWITCH_LOOP_DEFAULT_RANGE = ("22", "-22", "2")

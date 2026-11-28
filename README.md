@@ -95,7 +95,9 @@ Scan box (user, 2026-11-27):
   mark (the trace CSV had none before). Save CSV as suggests
   `<name>_copy.csv` in the run folder; the program log `Transport_RT_log_<date>_<time>.txt`.
   The names of the CSV's columns and of the log's fields are unchanged.
-- **Switch-OOP** opens as the user's figure of 2026-11-28: Switch-loop from 24
+- **Switch-OOP** opens on the Switch scan with the states of the user's second
+  figure of 2026-11-28 (below). Its Switch-loop scan is as the first figure of
+  that day: from 24
   to -24 mA in 2 mA steps and back, 1 loop, Settle s 10, Acquire s 10, outer
   field 500 G; and, from the figure of 2026-11-27, 1000 µs pulses, read
   current 0.5 mA RMS, SR830-1 on the 1st harmonic. The read current and the
@@ -121,10 +123,15 @@ Scan box (user, 2026-11-27):
 
   | | Angle ° | Field G | Pulse mA | Pulse µs |
   | --- | --- | --- | --- | --- |
-  | 1 | 0 | 500 | 20 | 1000 |
-  | 2 | 0 | 500 | -20 | 1000 |
-  | 3 | 90 | 500 | 20 | 1000 |
-  | 4 | 90 | 500 | -20 | 1000 |
+  | 1 | -360 | 1000 | 0 | 50 |
+  | 2 | -270 | 200 | -10 | 50 |
+  | 3 | -270 | 200 | 10 | 50 |
+  | 4 | -360 | -1000 | 0 | 50 |
+
+  These are the Switch-OOP tab's states (the user's figure, 2026-11-28). In
+  the other tabs the table shows 0°, 0°, 90°, 90°; 500 G; ±20 mA; 1000 µs
+  (30 µs on Switch-IP). A cell follows the tab only while it still holds what
+  the program put there, so a typed value stays.
 
   - **Settle s and Acquire s** start at 10 s in the Switch scan, on both
     Switch tabs (user, 2026-11-28); a typed value stays.
@@ -152,8 +159,6 @@ Scan box (user, 2026-11-27):
     columns when the states have angles. `measured_field_g` is the field at the
     read, and `outer_target_field_g` is the 0 G every state is read at. The
     run's settings list the states under `pulse.states`.
-  - The Pulse µs of the states follows the tab like the Pulse µs box: 30 on
-    Switch-IP, 1000 elsewhere, while it holds what the program put there.
   - In a wide Scan box the table stands beside the scan's rows; in a narrow
     one it is in the first row, beside the scan list.
 - **PHE** opens as the user's second figure of 2026-11-27: Angle+Field from 0

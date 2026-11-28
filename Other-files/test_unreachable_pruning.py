@@ -1,6 +1,7 @@
 """The pass that takes unreachable code out of the generated program (tools/extract_app.py, prune_unreachable).
 
-User, 2026-11-28: "remove the unused code in RT to make it as shorter as possible".  The program is an
+User, 2026-11-28: "remove the unused code in RT to make it as shorter as possible", then "do the same for PPMS,
+MOKE and FMR".  This file is the same on the four branches but for the block of settings below.  The program is an
 instrument program: a method taken out that the program still calls would fail in the middle of a measurement.
 So the rules are tested here on small programs, one rule each, and the generated program is checked for the
 two things the pass relies on: nothing more can be taken out of it (it is the pass's own result), and it has
@@ -16,7 +17,31 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 import extract_app  # noqa: E402
 
+# ---- this program ----------------------------------------------------------------------------------------
 APP = ROOT / "transport" / "rt" / "app.py"
+# Other pages' code that was in the module before the pass, and must not come back.
+GONE = ("CombinedControlApp.build_ppms_ui", "CombinedControlApp.start_ppms_field_scan", "CombinedControlApp._ppms_field_scan_worker",
+        "CombinedControlApp.open_ppms_macro", "PPMSMotorDebug", "parse_ppms_macro", "NonLocalACController.connect_nanovoltmeter",
+        "Keithley6221Controller.set_dc_pulse", "PPMSRemoteReadbackController.connect")
+# What the program needs, the switching-off and closing above all.
+STAYS = ("RTEPanel", "RTEPanel.safe_close_ppms", "CombinedControlApp.safe_close_ppms", "CombinedControlApp.ppms_sources_off",
+         "NonLocalACController.output_off", "STFMRKepco4886Controller.force_output_off", "LakeShoreMagnetSupplyController",
+         "NewmarkNSCA1Controller", "AvtechPulserController", "main", "run", "APP_VERSION")
+# Every getattr / setattr / hasattr whose name is not a literal (where, the name's expression): each looked at.
+# They take the name from literals in the program (which the pass counts), from a DLL or another library's
+# object, or hand on the name they were asked for.  Names built with an f-string are checked by their shape.
+KNOWN_LOOKUPS = {
+    ("CombinedControlApp._ppms_harmonic_var", "PPMS_SR830_HARMONIC_ATTRS[key]"),     # names in that constant
+    ("RTEPanel._initialize_ppms_state", "PPMS_SR830_HARMONIC_ATTRS[key]"),
+    ("PPMSPanel.__getattr__", "name"),                                               # handed on to the main window
+    ("newmark_declare_functions", "name"),                                           # a DLL's functions
+    ("NewmarkNSCA1Controller._function", "name"),
+    ("NonLocalACController.connect_mfli", "name"),                                   # NONLOCAL_MFLI_DAQ_METHODS, on LabOne's class
+    ("RTEPanel.safe_close_ppms", "name"),                                            # a tuple of literals, set to None
+}
+# Functions that read self.__dict__[name] with a name that is not a literal (plain values, never methods).
+KNOWN_DICT_LOOKUPS = set()
+# ----------------------------------------------------------------------------------------------------------
 
 
 def pruned(source: str, roots=("main",)) -> str:
@@ -501,19 +526,17 @@ class GeneratedProgramTests(unittest.TestCase):
 
     def test_the_other_pages_code_is_not_in_it(self):
         left = definitions(self.text)
-        for name in ("CombinedControlApp.build_ppms_ui", "CombinedControlApp.start_ppms_field_scan", "CombinedControlApp._ppms_field_scan_worker",
-                     "CombinedControlApp.open_ppms_macro", "PPMSMotorDebug", "parse_ppms_macro", "NonLocalACController.connect_nanovoltmeter",
-                     "Keithley6221Controller.set_dc_pulse", "PPMSRemoteReadbackController.connect"):
+        for name in GONE:
             self.assertNotIn(name, left)
-        for name in ("RTEPanel", "RTEPanel.safe_close_ppms", "CombinedControlApp.safe_close_ppms", "CombinedControlApp.ppms_sources_off",
-                     "NonLocalACController.output_off", "STFMRKepco4886Controller.force_output_off", "LakeShoreMagnetSupplyController",
-                     "NewmarkNSCA1Controller", "AvtechPulserController", "main", "run", "APP_VERSION"):
+        for name in STAYS:
             self.assertIn(name, left)
 
     def test_no_attribute_is_looked_up_by_a_name_built_at_run_time(self):
-        """getattr and setattr with a name that is not a literal: each one known, and each takes its name from
-        literals in the program (which the pass counts), a DLL's exports, or hands on the name it was asked for.
-        A new one must be looked at before it is added here."""
+        """getattr and setattr with a name that is not a literal: each one known (KNOWN_LOOKUPS).  A new one
+        must be looked at before it is added there.  A name built with an f-string (f"stfmr_{kind}_running") is
+        the name of a value: no method or function of the module may have that shape."""
+        import re
+        defined = {name.split(".")[-1] for name in definitions(self.text)}
         parents = {child: node for node in ast.walk(self.tree) for child in ast.iter_child_nodes(node)}
 
         def where(node):
@@ -531,23 +554,18 @@ class GeneratedProgramTests(unittest.TestCase):
             if name in ("getattr", "setattr", "hasattr", "delattr") and len(node.args) >= 2:
                 asked = node.args[1]              # a literal, or one of two literals ("a" if x else "b")
                 choices = [asked.body, asked.orelse] if isinstance(asked, ast.IfExp) else [asked]
-                if not all(isinstance(item, ast.Constant) and isinstance(item.value, str) for item in choices):
+                if isinstance(asked, ast.JoinedStr):
+                    shape = "".join(re.escape(part.value) if isinstance(part, ast.Constant) else r"\w*" for part in asked.values)
+                    self.assertEqual([name for name in defined if re.fullmatch(shape, name)], [], ast.unparse(asked))
+                elif not all(isinstance(item, ast.Constant) and isinstance(item.value, str) for item in choices):
                     found.add((where(node), ast.unparse(asked)))
             if isinstance(node.func, ast.Name):          # Python's own; root.tk.eval is Tcl's
                 self.assertNotIn(name, ("eval", "exec", "locals", "vars"), where(node))
             self.assertNotIn(name, ("attrgetter", "methodcaller", "__getattribute__"), where(node))
-        self.assertEqual(found, {
-            ("CombinedControlApp._ppms_harmonic_var", "PPMS_SR830_HARMONIC_ATTRS[key]"),     # names in that constant
-            ("RTEPanel._initialize_ppms_state", "PPMS_SR830_HARMONIC_ATTRS[key]"),
-            ("PPMSPanel.__getattr__", "name"),                                               # handed on to the main window
-            ("newmark_declare_functions", "name"),                                           # a DLL's functions
-            ("NewmarkNSCA1Controller._function", "name"),
-            ("NonLocalACController.connect_mfli", "name"),                                   # NONLOCAL_MFLI_DAQ_METHODS, on LabOne's class
-            ("RTEPanel.safe_close_ppms", "name"),                                            # a tuple of literals, set to None
-        })
+        self.assertEqual(found, KNOWN_LOOKUPS)
         for node in ast.walk(self.tree):
-            if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute) and node.value.attr == "__dict__":
-                self.assertIsInstance(node.slice, ast.Constant, ast.unparse(node))
+            if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute) and node.value.attr == "__dict__" and not isinstance(node.slice, ast.Constant):
+                self.assertIn(where(node).split(".")[1], KNOWN_DICT_LOOKUPS, ast.unparse(node))
 
 
 if __name__ == "__main__":

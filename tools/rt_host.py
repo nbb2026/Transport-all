@@ -442,7 +442,7 @@ SOURCE_REPLACE = (
     ("                    order='read current off, pulse, read current on again, settle, read',\n                    read_settle_s=switch_settle_s, read_settle_time_constants=SWITCH_READ_SETTLE_TAUS)\n",
      "                    order='read current off, pulse, read current on again, settle, read',\n                    read_settle_s=switch_settle_s, read_settle_time_constants=SWITCH_READ_SETTLE_TAUS)\n                if pulse.get('states'):\n                    self._rte_states_run_settings(run_settings, pulse)\n"),
     ("            self.ppms_plot_x_range = (min((p[2] for p in plan)), max((p[2] for p in plan))) if switch or mode == 'Current' else None\n",
-     "            self.ppms_plot_x_range = (0.5, len(pulse['states']) + 0.5) if switch and pulse.get('states') else (min((p[2] for p in plan)), max((p[2] for p in plan))) if switch or mode == 'Current' else None\n"),
+     "            self.rte_plot_states = len(pulse['states']) if switch and pulse.get('states') else 0\n            self.ppms_plot_x_range = (0.5, self.rte_plot_states * plan[-1][0] + 0.5) if self.rte_plot_states else (min((p[2] for p in plan)), max((p[2] for p in plan))) if switch or mode == 'Current' else None\n"),
     ("            elif switch:\n                self.ppms_field_scan_status_var.set(f'{self.ppms_page_name} {mode}: {len(outer)} fields x {len(plan)} pulses; {self.ppms_field_scan_total} points')\n",
      "            elif switch and pulse.get('states'):\n                self.rte_stage_where = 'stage not moved'\n                self.ppms_field_scan_status_var.set(f\"{self.ppms_page_name} {mode}: {len(pulse['states'])} states x {len(plan) // len(pulse['states'])} cycle(s); {self.ppms_field_scan_total} points\")\n            elif switch:\n                self.ppms_field_scan_status_var.set(f'{self.ppms_page_name} {mode}: {len(outer)} fields x {len(plan)} pulses; {self.ppms_field_scan_total} points')\n"),
     ("                               if outer and angle else\n                               f'; fields as typed: {rte_outer_values_text(outer, 50)} (± '\n",
@@ -468,6 +468,19 @@ SOURCE_REPLACE = (
      "'pulse_amplitude_v' if avtech else 'state' if switch and pulse.get('states') else 'pulse_current_ma' if switch else '6221_current_rms_ma'\n"),
     ("                          'pulse': ('pulse_current_ma', '6221 pulse current (mA)'),\n",
      "                          'pulse': ('pulse_current_ma', '6221 pulse current (mA)'),\n                          'state': ('state', 'State'),\n"),
+    # The Switch scan's cycles side by side (user's figure of two cycles drawn over each other, 2026-11-28: "for
+    # switch cycle, the first row should have 1,2,3,4,5,6,1,2,3,4,5,6... this type x-axis"): a point is drawn at
+    # (cycle - 1) x states + state, all cycles are one line, and the axis is labelled with the states' numbers.
+    ("            x_value = row.get(x_key)\n            if isinstance(x_value, (float, int)):\n                step = rte_outer_step_of(row)\n                tail = f\"P{row.get('harmonic_pass', 1)} L{row['loop']}\"\n",
+     "            x_value = row.get(x_key)\n            if isinstance(x_value, (float, int)):\n                step = rte_outer_step_of(row)\n                x_value, tail = (x_value + (row['loop'] - 1) * cycle, f\"P{row.get('harmonic_pass', 1)}\") if cycle else (x_value, f\"P{row.get('harmonic_pass', 1)} L{row['loop']}\")\n"),
+    ("        prepared = []\n        for row in self.ppms_field_scan_rows:\n            x_value = row.get(x_key)\n            if isinstance(x_value, (float, int)):\n                step = rte_outer_step_of(row)\n",
+     "        prepared, cycle = [], self.__dict__.get('rte_plot_states', 0) if axis == 'state' else 0\n        for row in self.ppms_field_scan_rows:\n            x_value = row.get(x_key)\n            if isinstance(x_value, (float, int)):\n                step = rte_outer_step_of(row)\n"),
+    ("                    x_range=None if axis == 'angle' else (self.__dict__.get('ppms_plot_x_range') if axis != 'field' else None) or (math.inf, -math.inf),\n",
+     "                    x_range=None if axis == 'angle' else (self.__dict__.get('ppms_plot_x_range') if axis != 'field' else None) or (math.inf, -math.inf),\n                    **({'x_cycle': cycle} if cycle else {}),\n"),
+    ("        angle_x_range=None,\n        x_range=None,\n    ) -> None:\n",
+     "        angle_x_range=None,\n        x_range=None,\n        x_cycle=None,\n    ) -> None:\n"),
+    ("        for tick_index, x_value in enumerate(x_ticks):\n            x = left + (x_value - x_min) / (x_max - x_min) * plot_width\n            canvas.create_line(x, top + plot_height, x, top + plot_height + 4)\n            if not hide_x_labels:\n",
+     "        cycle_ticks = rte_state_cycle_ticks(x_cycle, x_min, x_max, plot_width) if x_cycle else None\n        for tick_index, x_value in enumerate(x_ticks if cycle_ticks is None else [tick[0] for tick in cycle_ticks]):\n            x = left + (x_value - x_min) / (x_max - x_min) * plot_width\n            canvas.create_line(x, top + plot_height, x, top + plot_height + 4)\n            if cycle_ticks is not None:\n                if cycle_ticks[tick_index][1] and not hide_x_labels:\n                    canvas.create_text(x, top + plot_height + 15, text=cycle_ticks[tick_index][1])\n                continue\n            if not hide_x_labels:\n"),
     ("        pulse_axis = axis in ('pulse', 'avtech')\n",
      "        pulse_axis = axis in ('pulse', 'avtech', 'state')\n"),
     ("        return self.__dict__.get('ppms_plot_axis') in ('pulse', 'avtech')\n",
@@ -778,6 +791,21 @@ SWITCH_STATES_ACQUIRE_S = 10.0
 
 def rte_pulse_axis(mode):
     return 'avtech' if mode == SWITCH2_SCAN_MODE else 'state' if mode == SWITCH_SCAN_MODE else 'pulse'
+
+
+# The State axis of the Switch scan with its cycles side by side: a mark at every state of every cycle, labelled
+# with the state's number (1 2 3 4 1 2 3 4 ...).  Where the numbers would run into each other every second, third
+# ... state of a cycle is labelled, counted from state 1 again in each cycle; past that, state 1 of every n-th
+# cycle; marks closer than 4 px are left out with their numbers.
+def rte_state_cycle_ticks(states, x_min, x_max, plot_width):
+    spacing = plot_width / max(x_max - x_min, 1e-9)
+    every, ticks = max(1, math.ceil((22 if states >= 10 else 15) / spacing)), []
+    for position in range(max(1, math.ceil(x_min)), math.floor(x_max) + 1):
+        cycle, state = divmod(position - 1, states)
+        shown = state % every == 0 and (state == 0 or states - state >= every) if every <= states else state == 0 and cycle % math.ceil(every / states) == 0
+        if shown or spacing >= 4:
+            ticks.append((position, str(state + 1) if shown else ''))
+    return ticks
 
 
 def rte_switch_states(rows, count):

@@ -399,6 +399,30 @@ class SwitchPageTests(unittest.TestCase):
         panel._draw_nonlocal_series(canvas, pulses, "6221 pulse current (mA)", "X voltage", "wait", x_range=(-10.0, 10.0))
         self.assertTrue({"-10", "10"} <= set(canvas.texts()), canvas.texts())
 
+    def test_the_state_axis_counts_the_states_again_in_every_cycle(self):
+        """User's figure of two cycles of six states drawn over each other, 2026-11-28: "for switch cycle, the
+        first row should have 1,2,3,4,5,6,1,2,3,4,5,6... this type x-axis"."""
+        from test_nonlocal_keithley import Canvas
+        panel = ete.build_page(kepco=False)
+        points = {"SR830-1 P1": [(position, 1e-6 * (position % 6 >= 4)) for position in range(1, 13)]}
+        canvas = Canvas(1000, 300)
+        panel._draw_nonlocal_series(canvas, points, "State", "X voltage", "wait", x_range=(0.5, 12.5), x_cycle=6)
+        numbers = [text for text in canvas.texts() if text.isdigit()]
+        self.assertEqual(numbers[:12], ["1", "2", "3", "4", "5", "6"] * 2, canvas.texts())
+        self.assertNotIn("12", canvas.texts())
+        # The other axes are drawn as before.
+        panel._draw_nonlocal_series(canvas, points, "State", "X voltage", "wait", x_range=(0.5, 12.5))
+        self.assertTrue({"2.5", "12.5"} <= set(canvas.texts()), canvas.texts())
+        # Every state of every cycle has a mark; the numbers thin out before they touch, counted from 1 in each cycle.
+        ticks = app.rte_state_cycle_ticks
+        self.assertEqual(ticks(4, 0.5, 4.5, 800), [(1, "1"), (2, "2"), (3, "3"), (4, "4")])
+        self.assertEqual([label for _x, label in ticks(6, 0.5, 60.5, 800)], ["1", "", "3", "", "5", ""] * 10)
+        self.assertEqual([label for _x, label in ticks(5, 0.5, 50.5, 700)], ["1", "", "3", "", ""] * 10, "no 5 beside the next cycle's 1")
+        many = ticks(4, 0.5, 400.5, 800)
+        self.assertEqual([x for x, _label in many], list(range(1, 400, 8)), "marks closer than 4 px go with their numbers")
+        self.assertEqual({label for _x, label in many}, {"1"})
+        self.assertEqual([label for _x, label in ticks(12, 0.5, 24.5, 800)][:13], [str(n) for n in range(1, 13)] + ["1"])
+
     def test_the_lockins_start_at_gpib_9_10_and_11(self):
         """User, 2026-11-25: "default settings as the fig in SHHV & Switch"
         (SR830-1 GPIB0::9, SR830-2 GPIB0::10, SR830-3 GPIB0::11).  The page
@@ -634,16 +658,16 @@ class SwitchScanTests(SwitchScan):
                          [("start", 0.0)] + [("write", 100.0), ("read", 0.0), ("write", -50.0), ("read", 0.0)] * 2)
         self.assertEqual([e["target_deg"] for e in events if e["event"] == "stage_move"], [0.0, 90.0, 90.0] * 2)
         self.assertEqual(events[-1]["event"], "run_finished")
-        # The plots: X and Y in volts against the state's number, the cycles as lines of their own.
+        # The plots: X and Y in volts against the state's number, the cycles side by side (user, 2026-11-28:
+        # "for switch cycle, the first row should have 1,2,3,4,5,6,1,2,3,4,5,6... this type x-axis").
         state_calls = [call for call in h.draw.call_args_list if call.args[2] == "State"]
         self.assertEqual({call.args[3] for call in state_calls}, {"X voltage", "Y voltage"})
-        self.assertEqual({call.kwargs["x_range"] for call in state_calls}, {(0.5, 3.5)})
+        self.assertEqual({(call.kwargs["x_range"], call.kwargs["x_cycle"]) for call in state_calls}, {((0.5, 6.5), 3)})
         canvases = h.panel.ppms_harmonic_canvases
         last_x = [call for call in state_calls if call.args[0] is canvases[(1, "x")]][-1]
         saved = h.panel.ppms_field_scan_rows
         self.assertEqual(len(saved), 6)
-        self.assertEqual(sorted(x for points in last_x.args[1].values() for x, _v in points), [1, 1, 2, 2, 3, 3])
-        self.assertEqual(len(last_x.args[1]), 2, "one line a cycle")
+        self.assertEqual([[x for x, _v in points] for points in last_x.args[1].values()], [[1, 2, 3, 4, 5, 6]], "the cycles, one after the other on one line")
         self.assertFalse([call for call in state_calls if call.args[0] is canvases[(1, "theta")]])
         # X and Y against time: every sample of each reading, a segment per
         # reading (user, 2026-11-22: "it should show the voltage in the

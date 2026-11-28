@@ -6372,6 +6372,7 @@ class CombinedControlApp:
         symmetric_x_extent=None,
         angle_x_range=None,
         x_range=None,
+        x_cycle=None,
     ) -> None:
         canvas.delete("all")
         width = max(canvas.winfo_width(), 330)
@@ -6430,9 +6431,14 @@ class CombinedControlApp:
         else:
             x_min, x_max, x_ticks, x_tick_step = nice_linear_ticks(min(xs), max(xs))
         y_min, y_max, y_ticks, y_tick_step = nice_linear_ticks(min(ys), max(ys))
-        for tick_index, x_value in enumerate(x_ticks):
+        cycle_ticks = rte_state_cycle_ticks(x_cycle, x_min, x_max, plot_width) if x_cycle else None
+        for tick_index, x_value in enumerate(x_ticks if cycle_ticks is None else [tick[0] for tick in cycle_ticks]):
             x = left + (x_value - x_min) / (x_max - x_min) * plot_width
             canvas.create_line(x, top + plot_height, x, top + plot_height + 4)
+            if cycle_ticks is not None:
+                if cycle_ticks[tick_index][1] and not hide_x_labels:
+                    canvas.create_text(x, top + plot_height + 15, text=cycle_ticks[tick_index][1])
+                continue
             if not hide_x_labels:
                 canvas.create_text(x, top + plot_height + 15, text=format_nice_tick(x_value, x_tick_step), anchor='w' if tick_index == 0 else 'e' if tick_index == len(x_ticks) - 1 else 'center')
         spacing = plot_height / max(1, len(y_ticks) - 1)
@@ -10992,7 +10998,8 @@ class RTEPanel(PPMSPanel):
             self.ppms_active_scan_mode = mode
             self.ppms_plot_axis = 'field' if mode in RTE_FIELD_SWEEP_MODES else 'angle' if angle else rte_pulse_axis(mode) if switch else 'current'
             self.ppms_plot_angle_range = (min((p[2] for p in plan)), max((p[2] for p in plan))) if angle else None
-            self.ppms_plot_x_range = (0.5, len(pulse['states']) + 0.5) if switch and pulse.get('states') else (min((p[2] for p in plan)), max((p[2] for p in plan))) if switch or mode == 'Current' else None
+            self.rte_plot_states = len(pulse['states']) if switch and pulse.get('states') else 0
+            self.ppms_plot_x_range = (0.5, self.rte_plot_states * plan[-1][0] + 0.5) if self.rte_plot_states else (min((p[2] for p in plan)), max((p[2] for p in plan))) if switch or mode == 'Current' else None
             self.ppms_plot_addresses = {key: self._ppms_sr830_address(self.ppms_instrument_controllers[key].resource_name) for key in settings['active_lockins']}
             self.ppms_field_scan_rows = []
             self.rte_switch_traces, self.rte_switch_trace_path, self.rte_switch_trace_failed = [], None, False
@@ -12077,12 +12084,12 @@ class RTEPanel(PPMSPanel):
         for (order, channel), canvas in canvases.items():
             if not (pulse_axis and channel == 'theta'):
                 by_order.setdefault(order, []).append((channel, canvas))
-        prepared = []
+        prepared, cycle = [], self.__dict__.get('rte_plot_states', 0) if axis == 'state' else 0
         for row in self.ppms_field_scan_rows:
             x_value = row.get(x_key)
             if isinstance(x_value, (float, int)):
                 step = rte_outer_step_of(row)
-                tail = f"P{row.get('harmonic_pass', 1)} L{row['loop']}"
+                x_value, tail = (x_value + (row['loop'] - 1) * cycle, f"P{row.get('harmonic_pass', 1)}") if cycle else (x_value, f"P{row.get('harmonic_pass', 1)} L{row['loop']}")
                 prepared.append((row, x_value, step, tail if step is None else f'{step[1]} {tail}'))
         for order, targets in by_order.items():
             columns = tuple(((channel, 'theta_deg' if channel == 'theta' else f'{channel}_v') for channel, _ in targets))
@@ -12125,6 +12132,7 @@ class RTEPanel(PPMSPanel):
                     show_legend=False, series_colors=colors[channel], series_markers=markers[channel],
                     angle_x_range=self.__dict__.get('ppms_plot_angle_range') if axis == 'angle' else None,
                     x_range=None if axis == 'angle' else (self.__dict__.get('ppms_plot_x_range') if axis != 'field' else None) or (math.inf, -math.inf),
+                    **({'x_cycle': cycle} if cycle else {}),
                     **({'series_labels': labels[channel]} if labels[channel] else {}))
         self._redraw_switch_time_plot()
     def save_ppms_field_scan_csv(self):
@@ -12212,6 +12220,15 @@ SWITCH_DEFAULT_STATES = (("0", "500", "20", "1000"), ("0", "500", "-20", "1000")
 SWITCH_STATE_READ_FIELD_G = 0.0
 SWITCH_STATES_SETTLE_S = 10.0
 SWITCH_STATES_ACQUIRE_S = 10.0
+def rte_state_cycle_ticks(states, x_min, x_max, plot_width):
+    spacing = plot_width / max(x_max - x_min, 1e-9)
+    every, ticks = max(1, math.ceil((22 if states >= 10 else 15) / spacing)), []
+    for position in range(max(1, math.ceil(x_min)), math.floor(x_max) + 1):
+        cycle, state = divmod(position - 1, states)
+        shown = state % every == 0 and (state == 0 or states - state >= every) if every <= states else state == 0 and cycle % math.ceil(every / states) == 0
+        if shown or spacing >= 4:
+            ticks.append((position, str(state + 1) if shown else ''))
+    return ticks
 def rte_switch_states(rows, count):
     # The first `count` rows of the table as states: number, stage angle (None: an empty box), field, pulse
     # current and pulse width.  The angles are typed for every state or for none.

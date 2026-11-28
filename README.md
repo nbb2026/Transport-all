@@ -152,8 +152,13 @@ Scan box (user, 2026-11-27):
   - **Each field**, 0 G too, is found on the LS475 as Set field finds it,
     within the Tol. box, so a state with a field takes two field settings. A
     state written at 0 G leaves the field alone.
-  - **Plots:** X and Y against the state's number, one line a cycle; X and Y
-    against time as before.
+  - **Plots:** X and Y against the state's number, the cycles side by side on
+    one line: with 6 states and 2 cycles the axis reads 1 2 3 4 5 6 1 2 3 4 5 6
+    (user, 2026-11-28; until then the cycles were drawn over each other). The
+    axis is as long as States x Cycles from the start of the scan. Where the
+    numbers would touch, every second, third ... state is numbered, from 1
+    again in each cycle. X and Y against time as before. The saved `state`
+    and `loop` columns are unchanged.
   - **Saved:** besides the Switch scan's columns, `state`,
     `write_target_field_g`, `write_field_g` and `write_current_a` (the LS475
     field and the supply current the state was written at), and the stage's

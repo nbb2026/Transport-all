@@ -11757,7 +11757,7 @@ class CombinedControlApp:
             parent=self.root,
             title="Save STFMR FMR CSV",
             defaultextension=".csv",
-            initialfile=time.strftime("STFMR_FMR_%Y%m%d_%H%M%S.csv"),
+            initialfile=f"{Path(where).name}_copy.csv" if where else time.strftime("STFMR_FMR_%Y%m%d_%H%M%S.csv"),
             filetypes=(("CSV", "*.csv"),),
             **({"initialdir": str(where)} if where else {}),
         )
@@ -11785,9 +11785,7 @@ class CombinedControlApp:
             parent=self.root,
             title="Save STFMR fixed-field frequency sweep CSV",
             defaultextension=".csv",
-            initialfile=time.strftime(
-                "STFMR_frequency_sweep_%Y%m%d_%H%M%S.csv"
-            ),
+            initialfile=f"{Path(where).name}_copy.csv" if where else time.strftime("STFMR_frequency_sweep_%Y%m%d_%H%M%S.csv"),
             filetypes=(("CSV", "*.csv"),),
             **({"initialdir": str(where)} if where else {}),
         )
@@ -12873,7 +12871,7 @@ class CombinedControlApp:
     def save_communication_log(self) -> None:
         path = filedialog.asksaveasfilename(
             parent=self.root, title="Save the full program log (including lines buffered while paused)",
-            initialfile=time.strftime("Transport_log_%Y%m%d_%H%M%S.txt"),
+            initialfile=time.strftime("Transport_FMR_log_%Y%m%d_%H%M%S.txt"),
             defaultextension=".txt", filetypes=(("Text", "*.txt"),))
         if not path:
             return

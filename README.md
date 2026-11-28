@@ -134,6 +134,21 @@ To bring a later change of the main program here, run the tool again on the
 new `Transport_all.py`, then the tests. Do not edit `app.py` by hand: change
 the two steering files.
 
+## What the program saves, and under which names
+
+One rule since 2026-11-28 (the same on the four programs):
+
+- A scan's run is `<folder>/<name>/` (`<name>_01`, ... when taken) with
+  `<name>.csv`, `<name>.log` and `<name>_<part>_snapshot.png`, all written by
+  the run's recorder. A blank name is `STFMR_field_scan_<date>_<time>_<µs>`
+  (ST-FMR), `FMR_field_<date>_<time>` or `FMR_frequency_<date>_<time>` (FMR):
+  the analysis tools find the runs by these names, so they are as they were.
+- A copy saved by hand on the FMR page is suggested as `<name>_copy.csv` in the
+  run folder (its figure beside it as `<name>_copy.png`); ST-FMR's Save writes
+  `STFMR_saved_<date>_<time>_<µs>.csv` and its figures into the folder chosen.
+- The program log is suggested as `Transport_FMR_log_<date>_<time>.txt`.
+- The names of the CSV's columns and of the log's fields are unchanged.
+
 ## Tests
 
 Offline only; no instrument, port or VISA session is opened.

@@ -189,9 +189,11 @@ class ThePage(unittest.TestCase):
     def test_the_switch_oop_tab_opens_on_the_switch_scan_with_the_figures_states(self):
         """User's figure, 2026-11-28 ("Switch-OOP default use the figure's settings"): the Switch scan, States 4,
         -360 deg / 1000 G / 0 mA, -270 / 200 / -10, -270 / 200 / 10, -360 / -1000 / 0, 50 us each; Settle s 10,
-        Acquire s 10, Cycles 1, Pulses 1.  The other tabs show the table's own start-up states, a typed cell
+        Acquire s 10, Cycles 1, Pulses 1.  Figure of the table later that day ("switching default use this
+        settings."): 600 G / 0 mA, 100 G / -17 mA, 100 G / 17 mA, -600 G / 0 mA at the same angles, 1000 us each.
+        The other tabs show the table's own start-up states, a typed cell
         stays, and the tab's Switch-loop values are as they were."""
-        figure = [["-360", "1000", "0", "50"], ["-270", "200", "-10", "50"], ["-270", "200", "10", "50"], ["-360", "-1000", "0", "50"]]
+        figure = [["-360", "600", "0", "1000"], ["-270", "100", "-17", "1000"], ["-270", "100", "17", "1000"], ["-360", "-600", "0", "1000"]]
         own = [list(row) for row in app.SWITCH_DEFAULT_STATES]
         panel = self.page()
 
@@ -208,7 +210,7 @@ class ThePage(unittest.TestCase):
         # The states are ones the scan takes: they parse, and the stage turns (every state has an angle).
         states = app.rte_switch_states(table(), "4")
         self.assertEqual([(s["angle_deg"], s["field_g"], s["pulse_ma"], round(s["width_s"] * 1e6, 6)) for s in states],
-                         [(-360.0, 1000.0, 0.0, 50.0), (-270.0, 200.0, -10.0, 50.0), (-270.0, 200.0, 10.0, 50.0), (-360.0, -1000.0, 0.0, 50.0)])
+                         [(-360.0, 600.0, 0.0, 1000.0), (-270.0, 100.0, -17.0, 1000.0), (-270.0, 100.0, 17.0, 1000.0), (-360.0, -600.0, 0.0, 1000.0)])
         # Switch-IP and the other tabs: the table's own states (30 us on Switch-IP); back: the figure's again.
         panel.rte_set_measurement("Switch-IP")
         self.assertEqual(table(), [[*row[:3], "30"] for row in own])
@@ -222,7 +224,7 @@ class ThePage(unittest.TestCase):
         panel.rte_set_measurement("Switch-IP")
         self.assertEqual(table(), [["0", "500", "20", "30"], ["0", "350", "-20", "30"], ["90", "500", "20", "80"], ["90", "500", "-20", "30"]])
         panel.rte_set_measurement("Switch-OOP")
-        self.assertEqual(table(), [figure[0], ["-270", "350", "-10", "50"], ["-270", "200", "10", "80"], figure[3]])
+        self.assertEqual(table(), [figure[0], ["-270", "350", "-17", "1000"], ["-270", "100", "17", "80"], figure[3]])
         # Switch-loop in this tab keeps the figure of the morning.
         panel.ppms_simple_mode.set("Switch-loop")
         panel._rte_mode_changed()
@@ -432,7 +434,8 @@ class ThePage(unittest.TestCase):
         panel.rte_set_measurement("SHHV")
         self.assertEqual(widths(), ["1000", "200", "1000", "1000", ""])
         panel.rte_set_measurement("Switch-OOP")
-        self.assertEqual(widths(), ["50", "200", "50", "50", ""])
+        self.assertEqual(widths(), ["1000", "200", "1000", "1000", ""])
+        self.assertEqual({row[3] for row in app.RTE_MEASUREMENT_START["Switch-OOP"]["states"]}, {"1000"})
 
     def test_settle_acquire_and_the_field_follow_between_the_two_switch_tabs(self):
         """Switch-OOP's Switch-loop shows Settle s 10, Acquire s 10 and 500 G (user's figure, 2026-11-28);

@@ -743,12 +743,15 @@ RTE_SCAN_BOX_FIRST = True
 # 200 G / 10 mA and -360 deg / -1000 G / 0 mA, 50 us each (states: what the table shows in this tab; a cell follows
 # the tab only while it holds what the program put there, and the other tabs show SWITCH_DEFAULT_STATES).  Settle s
 # 10, Acquire s 10, Cycles 1 and Pulses 1 were the scan's already.  The tab's Switch-loop values stay as they were.
+# Later on 2026-11-28 (user's figure of the table: "switching default use this settings."): the same angles with
+# 600 G / 0 mA, 100 G / -17 mA, 100 G / 17 mA and -600 G / 0 mA, 1000 us each.  The angles are Switch-OOP's and the
+# 1000 us is not Switch-IP's 30 us, so the figure is read as Switch-OOP's; Switch-IP keeps SWITCH_DEFAULT_STATES.
 RTE_MEASUREMENT_START = {
     "PHE": dict(scan="Angle+Field", harmonic_a="1", angle_field_g="1000", acquire_s={"Angle+Field": "2"}),
     "AHE": dict(scan="Field", current_ma="0.5", harmonic_a="1", ranges={"Field": ("-3", "3", "0.1")}),
     "Switch-OOP": dict(scan="Switch", current_ma="0.5", harmonic_a="1", ranges={"Switch-loop": ("24", "-24", "2")},
                        settle_s={"Switch-loop": "10"}, acquire_s={"Switch-loop": "10"}, loop_field_g="500",
-                       states=(("-360", "1000", "0", "50"), ("-270", "200", "-10", "50"), ("-270", "200", "10", "50"), ("-360", "-1000", "0", "50"))),
+                       states=(("-360", "600", "0", "1000"), ("-270", "100", "-17", "1000"), ("-270", "100", "17", "1000"), ("-360", "-600", "0", "1000"))),
     "Switch-IP": dict(scan="Switch-loop", current_ma="0.5", harmonic_a="2", ranges={"Switch-loop": ("14", "-14", "2")}, pulse_width_us="30"),
 }
 SWITCH_LOOP_DEFAULT_RANGE = ("22", "-22", "2")

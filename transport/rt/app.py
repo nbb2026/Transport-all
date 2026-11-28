@@ -1874,7 +1874,7 @@ RTE_MEASUREMENT_START = {
     "AHE": dict(scan="Field", current_ma="0.5", harmonic_a="1", ranges={"Field": ("-3", "3", "0.1")}),
     "Switch-OOP": dict(scan="Switch", current_ma="0.5", harmonic_a="1", ranges={"Switch-loop": ("24", "-24", "2")},
                        settle_s={"Switch-loop": "10"}, acquire_s={"Switch-loop": "10"}, loop_field_g="500",
-                       states=(("-360", "1000", "0", "50"), ("-270", "200", "-10", "50"), ("-270", "200", "10", "50"), ("-360", "-1000", "0", "50"))),
+                       states=(("-360", "600", "0", "1000"), ("-270", "100", "-17", "1000"), ("-270", "100", "17", "1000"), ("-360", "-600", "0", "1000"))),
     "Switch-IP": dict(scan="Switch-loop", current_ma="0.5", harmonic_a="2", ranges={"Switch-loop": ("14", "-14", "2")}, pulse_width_us="30"),
 }
 RTE_DEFAULT_MEASUREMENT = "SHHV"

@@ -95,7 +95,7 @@ Scan box (user, 2026-11-27):
   mark (the trace CSV had none before). Save CSV as suggests
   `<name>_copy.csv` in the run folder; the program log `Transport_RT_log_<date>_<time>.txt`.
   The names of the CSV's columns and of the log's fields are unchanged.
-- **Switch-OOP** opens on the Switch scan with the states of the user's second
+- **Switch-OOP** opens on the Switch scan with the states of the user's latest
   figure of 2026-11-28 (below). Its Switch-loop scan is as the first figure of
   that day: from 24
   to -24 mA in 2 mA steps and back, 1 loop, Settle s 10, Acquire s 10, outer
@@ -123,12 +123,13 @@ Scan box (user, 2026-11-27):
 
   | | Angle ° | Field G | Pulse mA | Pulse µs |
   | --- | --- | --- | --- | --- |
-  | 1 | -360 | 1000 | 0 | 50 |
-  | 2 | -270 | 200 | -10 | 50 |
-  | 3 | -270 | 200 | 10 | 50 |
-  | 4 | -360 | -1000 | 0 | 50 |
+  | 1 | -360 | 600 | 0 | 1000 |
+  | 2 | -270 | 100 | -17 | 1000 |
+  | 3 | -270 | 100 | 17 | 1000 |
+  | 4 | -360 | -600 | 0 | 1000 |
 
-  These are the Switch-OOP tab's states (the user's figure, 2026-11-28). In
+  These are the Switch-OOP tab's states (the user's second figure of
+  2026-11-28; the first had 1000 G, 200 G, ±10 mA and 50 µs). In
   the other tabs the table shows 0°, 0°, 90°, 90°; 500 G; ±20 mA; 1000 µs
   (30 µs on Switch-IP). A cell follows the tab only while it still holds what
   the program put there, so a typed value stays.

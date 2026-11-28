@@ -383,7 +383,10 @@ def main(argv) -> int:
 
 # Methods Python or the standard library calls by name on an object it is handed (a stream given to print,
 # a lock): kept in every class that is used, named in the program or not.
-PROTOCOL_NAMES = ("write", "flush", "close", "read", "readline", "fileno", "isatty")
+PROTOCOL_NAMES = ("write", "flush", "close", "read", "readline", "readlines", "writelines", "fileno", "isatty", "seek", "tell", "readable",
+                  "writable", "seekable", "acquire", "release", "locked", "keys")
+# Decorators that leave a method an ordinary method; any other may put it in a table when the class is made.
+PLAIN_DECORATORS = ("staticmethod", "classmethod", "property")
 CLASS_HOOKS = ("__init_subclass__", "__class_getitem__", "__set_name__")
 FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
 
@@ -398,16 +401,19 @@ def call_fits(shape, node) -> bool:
         return True                      # a property, or something else: not called through its own signature
     count, keywords = shape
     args = node.args
-    positional = [*args.posonlyargs, *args.args][0 if "staticmethod" in decorators else 1:]
-    if count > len(positional) and args.vararg is None:
+    positional = [*args.posonlyargs, *args.args]
+    required = len(positional) - len(args.defaults)
+    if args.kwarg is None and not keywords <= {arg.arg for arg in (*args.args, *args.kwonlyargs)}:
         return False
-    by_keyword = {arg.arg for arg in (*args.args, *args.kwonlyargs)}
-    if args.kwarg is None and not keywords <= by_keyword:
+    if not all(arg.arg in keywords for arg, default in zip(args.kwonlyargs, args.kw_defaults) if default is None):
         return False
-    needed = positional[count:len(positional) - len(args.defaults)] if len(args.defaults) else positional[count:]
-    if any(arg.arg not in keywords for arg in needed):
-        return False
-    return all(arg.arg in keywords for arg, default in zip(args.kwonlyargs, args.kw_defaults) if default is None)
+
+    def fits(taken):                     # taken: parameters filled before the call's own (self, on an object)
+        if count + taken > len(positional) and args.vararg is None:
+            return False
+        return all(arg.arg in keywords for arg in positional[count + taken:required])
+    # On an object the first parameter is filled; through the class itself (kind.scale(item, 3)) it is not.
+    return fits(0) if "staticmethod" in decorators else fits(1) or fits(0)
 
 
 def prune_unreachable(text: str, roots, details=None) -> tuple[str, list[str]]:
@@ -433,15 +439,49 @@ def prune_unreachable(text: str, roots, details=None) -> tuple[str, list[str]]:
       base is not a class of this module (an exception, a ctypes structure, a widget), all its methods, since
       code outside the module may call them.
 
+    * For a kept class: a method its class body names (an alias, a table, a default value, a decorator), and
+      a method under any decorator other than staticmethod, classmethod and property.
+    * ``self.name`` that finds no method where the class has ``__getattr__`` may be handed on to any object.
+
     What it cannot see is a method name built at run time (``getattr(x, "a" + b)``); the module has none
     (every ``getattr`` with a name that is not a literal passes the name on, or takes it from a tuple of
     literals), and Other-files/test_unreachable_pruning.py checks that this stays so.
+
+    What it does not follow it refuses, with SystemExit, rather than guess (an independent review, 2026-11-28,
+    reproduced a wrong removal for each; none is in the program): a class with two bases from this module, a
+    metaclass, a class defined twice, ``super`` used other than as ``super().name`` in a method, private
+    ``__names``, ``__subclasses__``, the module read as an object (``sys.modules``, ``globals()``, a module
+    ``__getattr__``), and two statements on one line.  One difference stays: a call whose arguments no kept
+    method takes used to raise TypeError and now raises AttributeError.
 
     Returns the new text and one line per definition taken out.
     """
     tree = ast.parse(text)
     lines = text.split("\n")
     classes = {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
+    refused = []
+    class_nodes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
+    for node in class_nodes:
+        if len([base for base in node.bases if isinstance(base, ast.Name) and base.id in classes]) > 1:
+            refused.append(f"class {node.name} has two bases from this module")
+        if node.keywords:
+            refused.append(f"class {node.name} has a metaclass or class keywords")
+        if classes[node.name] is not node:
+            refused.append(f"class {node.name} is defined twice")
+    for body in (tree.body, *(node.body for node in class_nodes)):
+        for before, after in zip(body, body[1:]):
+            if first_line(after) <= before.end_lineno:
+                refused.append(f"two statements on line {after.lineno}")
+    compared = {id(item) for node in ast.walk(tree) if isinstance(node, ast.Compare) for item in node.comparators}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr.startswith("__") and not node.attr.endswith("__"):
+            refused.append(f"a private name, .{node.attr}, line {node.lineno}")
+        elif isinstance(node, ast.Attribute) and (node.attr == "__subclasses__" or (node.attr == "modules" and isinstance(node.value, ast.Name) and node.value.id == "sys")):
+            refused.append(f".{node.attr}, line {node.lineno}")
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in ("globals", "locals", "vars") and id(node) not in compared:
+            refused.append(f"{node.func.id}(), line {node.lineno}")
+    if any(isinstance(node, FUNCTIONS) and node.name == "__getattr__" for node in tree.body):
+        refused.append("a module __getattr__")
 
     def mro(name):
         order = [name]
@@ -465,12 +505,22 @@ def prune_unreachable(text: str, roots, details=None) -> tuple[str, list[str]]:
                 return owner
         return None
 
+    def plain_constant(node) -> bool:
+        """NAME = value (or A, B = ...) that calls nothing: it can go when nothing names it.  An assignment to
+        an attribute or an item (sys.tracebacklimit = 5) acts on something else and stays."""
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            return False
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if any(isinstance(item, (ast.Attribute, ast.Subscript)) for target in targets for item in ast.walk(target)):
+            return False
+        return not any(isinstance(item, (ast.Call, ast.Await, ast.NamedExpr)) for item in ast.walk(node))
+
     top: dict[str, list] = {}
     start = []
     for node in tree.body:
         if isinstance(node, (ast.ClassDef, *FUNCTIONS)) and not node.decorator_list:
             top.setdefault(node.name, []).append(node)
-        elif isinstance(node, (ast.Assign, ast.AnnAssign)) and not any(isinstance(item, (ast.Call, ast.Await, ast.NamedExpr)) for item in ast.walk(node)):
+        elif plain_constant(node):
             for name in bound_names(node):
                 top.setdefault(name, []).append(node)
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
@@ -498,8 +548,9 @@ def prune_unreachable(text: str, roots, details=None) -> tuple[str, list[str]]:
                 if isinstance(value, ast.Name) and me and value.id == me:
                     own.add(item.attr)
                     not_made.add(id(value))
-                elif isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "super" and not value.args and me:
+                elif isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "super" and not value.args and not value.keywords and me:
                     inherited.add(item.attr)
+                    not_made.add(id(value.func))
                 elif isinstance(value, ast.Name) and value.id in classes:
                     explicit.add((value.id, item.attr))
                     not_made.add(id(value))
@@ -507,6 +558,8 @@ def prune_unreachable(text: str, roots, details=None) -> tuple[str, list[str]]:
                     anything.add((item.attr, shapes.get(id(item))))
             elif isinstance(item, ast.Name):
                 names.add(item.id)
+                if item.id == "super" and id(item) not in not_made:
+                    refused.append(f"super used other than as super().name in a method, line {item.lineno}")
                 if id(item) not in not_made:
                     if item.id in classes:
                         made.add(item.id)
@@ -528,7 +581,7 @@ def prune_unreachable(text: str, roots, details=None) -> tuple[str, list[str]]:
         visit(node, self_name)
         return names, made, anything, own, inherited, explicit, bool(bare)
 
-    names, made, anything = set(roots), set(), {(name, None) for name in PROTOCOL_NAMES}
+    names, made, anything = {*roots, "__all__"}, set(), {(name, None) for name in PROTOCOL_NAMES}
     kept_top, kept_classes, reached, waiting, pending = set(), set(), set(), [], set()
     scans = {}
 
@@ -547,6 +600,8 @@ def prune_unreachable(text: str, roots, details=None) -> tuple[str, list[str]]:
         else:
             for name in own:
                 reach(for_class, resolve(for_class, name), name)
+                if resolve(for_class, name) is None and resolve(for_class, "__getattr__"):
+                    anything.add((name, None))      # __getattr__ may hand it on to another object
             for name in inherited:
                 reach(for_class, resolve(for_class, name, after=owner), name)
             if class_method and bare:      # cls(...) or cls handed on: objects of that class may exist
@@ -558,11 +613,14 @@ def prune_unreachable(text: str, roots, details=None) -> tuple[str, list[str]]:
     def kind(node):
         return {item.id for item in node.decorator_list if isinstance(item, ast.Name)} & {"staticmethod", "classmethod"}
 
+    def state():
+        return len(names), len(made), len(anything), len(reached), len(pending), len(kept_top)
+
     for node in start:
         absorb(scan(node))
-    changed = True
-    while changed or waiting:
-        changed = False
+    before = None
+    while before != state() or waiting:
+        before = state()
         while waiting:
             for_class, owner, name = waiting.pop()
             for node in methods[(owner, name)]:
@@ -570,13 +628,11 @@ def prune_unreachable(text: str, roots, details=None) -> tuple[str, list[str]]:
                     first = [*node.args.posonlyargs, *node.args.args][:1]
                     scans[id(node)] = scan(node, first[0].arg if first and "staticmethod" not in kind(node) else None)
                 absorb(scans[id(node)], for_class, owner, "classmethod" in kind(node))
-            changed = True
         for name in list(names):
             for node in top.get(name, ()):
                 if id(node) in kept_top:
                     continue
                 kept_top.add(id(node))
-                changed = True
                 if not isinstance(node, ast.ClassDef):
                     absorb(scan(node))
                     continue
@@ -585,11 +641,20 @@ def prune_unreachable(text: str, roots, details=None) -> tuple[str, list[str]]:
                     reach(node.name, resolve(node.name, hook), hook)
                 for item in (*node.bases, *node.keywords):
                     names.update(sub.id for sub in ast.walk(item) if isinstance(sub, ast.Name))
-                for item in node.body:
-                    if not isinstance(item, FUNCTIONS):
+                for item in node.body:            # what runs when the class itself is made
+                    if isinstance(item, FUNCTIONS):
+                        plain = [extra for extra in item.decorator_list if (isinstance(extra, ast.Name) and extra.id in PLAIN_DECORATORS) or (
+                            isinstance(extra, ast.Attribute) and extra.attr in ("setter", "getter", "deleter"))]
+                        if len(plain) < len(item.decorator_list):
+                            reach(node.name, node.name, item.name)
+                        found = scan(ast.Module(body=[ast.Expr(extra) for extra in (
+                            *(extra for extra in item.decorator_list if extra not in plain), *item.args.defaults, *filter(None, item.args.kw_defaults))], type_ignores=[]))
+                    else:
                         found = scan(item)
-                        absorb(found)
-                        anything.update((sub, None) for sub in found[0] if (node.name, sub) in methods)
+                    absorb(found)
+                    for sub in found[0]:
+                        if (node.name, sub) in methods:
+                            reach(node.name, node.name, sub)
         called: dict[str, set] = {}
         for name, shape in anything:
             called.setdefault(name, set()).add(shape)
@@ -604,9 +669,16 @@ def prune_unreachable(text: str, roots, details=None) -> tuple[str, list[str]]:
                     reach(class_name, found, name)
         for class_name, name in list(pending):
             owner = resolve(class_name, name)
-            for for_class in [class_name, *(item for item in made if owner in lineage[item])] if owner else ():
+            if owner is None:                 # Enum.MEMBER, Structure.from_buffer_copy(...): may be an object of it
+                made.add(class_name)
+                continue
+            # A plain method through the class (Class.method(item)) may be handed an object of any class.
+            ordinary = any(not kind(node) for node in methods[(owner, name)])
+            for for_class in [class_name, *(item for item in made if ordinary or owner in lineage[item])]:
                 reach(for_class, owner, name)
 
+    if refused:
+        raise SystemExit("prune_unreachable cannot follow this module, and takes nothing out rather than guess:\n  " + "\n  ".join(sorted(set(refused))))
     kept_methods = {(owner, name) for _for_class, owner, name in reached}
     if details is not None:
         details.update(reached=reached, made=made, lineage=lineage, kept_top=kept_top, names=names)
@@ -619,8 +691,8 @@ def prune_unreachable(text: str, roots, details=None) -> tuple[str, list[str]]:
             report.append(f"{node.end_lineno - first + 1:5d}  {label}")
     for node in tree.body:
         if isinstance(node, (ast.Import, ast.ImportFrom)):
-            if isinstance(node, ast.ImportFrom) and node.module == "__future__":
-                continue
+            if isinstance(node, ast.Import) or node.module == "__future__" or any(alias.name == "*" for alias in node.names):
+                continue                  # only names of "from x import a, b" go: "import x.y" may be wanted for its effect
             wanted = [alias for alias in node.names if (alias.asname or alias.name).split(".")[0] in names]
             if len(wanted) < len(node.names):
                 node.names = wanted

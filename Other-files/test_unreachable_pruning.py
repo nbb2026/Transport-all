@@ -173,7 +173,8 @@ class RuleTests(unittest.TestCase):
         self.assertTrue(fits(None, method("self, a, b")))
         self.assertTrue(fits((2, frozenset()), method("self, a, b")))
         self.assertFalse(fits((1, frozenset()), method("self, a, b")))
-        self.assertFalse(fits((3, frozenset()), method("self, a, b")))
+        self.assertTrue(fits((3, frozenset()), method("self, a, b")))      # through the class: C.m(item, a, b)
+        self.assertFalse(fits((4, frozenset()), method("self, a, b")))
         self.assertTrue(fits((3, frozenset()), method("self, a, *rest")))
         self.assertTrue(fits((1, frozenset({"b"})), method("self, a, b")))
         self.assertFalse(fits((1, frozenset({"c"})), method("self, a, b")))
@@ -308,7 +309,7 @@ class RuleTests(unittest.TestCase):
         """))
         self.assertLessEqual({"tidy", "REGISTRY", "main"}, left)
 
-    def test_unused_imports_go_and_a_class_left_empty_still_parses(self):
+    def test_unused_from_imports_go_and_a_class_left_empty_still_parses(self):
         text = pruned("""
             import os, sys
             from pathlib import Path, PurePath
@@ -319,10 +320,169 @@ class RuleTests(unittest.TestCase):
                 return Path(sys.argv[0]), isinstance(1, Holder)
         """)
         ast.parse(text)
-        self.assertIn("import sys", text)
-        self.assertNotIn("os", text.split("class")[0])
+        self.assertIn("import os, sys", text)            # "import x" may be wanted for its effect: it stays
         self.assertIn("from pathlib import Path\n", text)
         self.assertIn("    pass", text)
+
+
+class ReviewCaseTests(unittest.TestCase):
+    """What an independent review (2026-11-28) got the first version to take out wrongly.  None of it was in
+    the program; each is now followed, or refused so that nothing is taken out."""
+
+    def test_a_plain_method_called_through_its_class_may_get_any_object(self):
+        left = definitions(pruned("""
+            class A:
+                def run(self):
+                    return self.step()
+                def step(self):
+                    return 1
+            class B:
+                def step(self):
+                    return 2
+            def main():
+                return A.run(B())
+        """))
+        self.assertIn("B.step", left)
+
+    def test_getattr_handing_a_name_on_keeps_the_other_classes_method(self):
+        left = definitions(pruned("""
+            class App:
+                def log(self):
+                    return "logged"
+            class Panel:
+                def __init__(self, app):
+                    self.app = app
+                def __getattr__(self, name):
+                    return getattr(self.app, name)
+                def go(self):
+                    return self.log()
+            def main():
+                return Panel(App()).go()
+        """))
+        self.assertIn("App.log", left)
+
+    def test_a_call_through_the_class_object_counts_self_as_an_argument(self):
+        left = definitions(pruned("""
+            class Meter:
+                def scale(self, factor):
+                    return factor
+            def main():
+                kind = Meter
+                return kind.scale(kind(), 3)
+        """))
+        self.assertIn("Meter.scale", left)
+        method = ast.parse("class C:\n    def m(self=None, a=1, b=2): pass").body[0].body[0]
+        self.assertTrue(extract_app.call_fits((0, frozenset()), method))
+
+    def test_what_the_class_body_names_stays_whoever_is_made(self):
+        for body, user in (("    redraw = _draw", "Sub().redraw()"), ("    TABLE = {'a': _draw}", "Base.check()"),
+                           ("    def run(self, how=_draw):\n        return how", "Sub().run()")):
+            with self.subTest(body=body):
+                source = ("class Base:\n    def _draw(self=None):\n        return 0\n" + body + "\n    @staticmethod\n    def check():\n        return 1\n"
+                          "class Sub(Base):\n    def _draw(self):\n        return 1\ndef main():\n    return " + user + "\n")
+                text = extract_app.prune_unreachable(source, ("main",))[0]
+                self.assertIn("Base._draw", definitions(text))
+                exec(compile(text, "pruned", "exec"), {})
+
+    def test_a_method_under_another_decorator_stays(self):
+        text = pruned("""
+            TABLE = {}
+            def register(function):
+                TABLE[function.__name__] = function
+                return function
+            class Handlers:
+                @register
+                def on_start(self):
+                    return "started"
+                def unused(self):
+                    return 0
+            def main():
+                return TABLE["on_start"](Handlers())
+        """)
+        self.assertIn("Handlers.on_start", definitions(text))
+        self.assertNotIn("Handlers.unused", definitions(text))
+
+    def test_a_class_reached_through_something_it_did_not_define_is_made(self):
+        left = definitions(pruned("""
+            import enum
+            class Mode(enum.Enum):
+                A = 1
+                def label(self):
+                    return "a"
+            class Point:
+                ORIGIN = None
+                def text(self):
+                    return "point"
+            def main(item):
+                return Mode.A.label(), Point.ORIGIN, item.text()
+        """))
+        self.assertLessEqual({"Mode.label", "Point.text"}, left)
+
+    def test_more_methods_python_calls_by_name(self):
+        left = definitions(pruned("""
+            import threading
+            class Table:
+                def keys(self):
+                    return ["a"]
+                def __getitem__(self, key):
+                    return 1
+            class Lock:
+                def acquire(self, *args):
+                    return True
+                def release(self):
+                    return None
+            def main():
+                return dict(Table()), threading.Condition(Lock())
+        """))
+        self.assertLessEqual({"Table.keys", "Lock.acquire", "Lock.release"}, left)
+
+    def test_module_level_statements_that_act_on_something_else_stay(self):
+        text = pruned("""
+            import os, sys
+            import encodings.idna
+            from math import *
+            DEFAULT = 5
+            class Box:
+                pass
+            BOX = Box()
+            sys.tracebacklimit = 7
+            os.environ["X"] = "1"
+            BOX.limit: int = DEFAULT
+            __all__ = ["exported"]
+            def exported():
+                return floor(1.5)
+            def main():
+                return 0
+        """)
+        for piece in ("import os, sys", "import encodings.idna", "from math import *", "sys.tracebacklimit = 7", 'os.environ["X"] = "1"',
+                      "DEFAULT = 5", "BOX.limit: int = DEFAULT", "def exported"):
+            self.assertIn(piece, text)
+        exec(compile(text, "pruned", "exec"), {"__name__": "pruned"})
+
+    def test_what_it_cannot_follow_it_refuses(self):
+        page = "class Base:\n    def close(self):\n        return 1\nclass Page(Base):\n    def close(self):\n        {}\ndef main():\n    return Page().close()\n"
+        cases = {
+            "super with arguments": page.format("return super(Page, self).close()"),
+            "super kept in a name": page.format("up = super(); return up.close()"),
+            "super in getattr": page.format("return getattr(super(), 'close')()"),
+            "super after self was rebound": page.format("self = self or None; return super().close()"),
+            "two bases": "class A:\n    pass\nclass B:\n    pass\nclass C(A, B):\n    pass\ndef main():\n    return C()\n",
+            "metaclass": "class Meta(type):\n    pass\nclass A(metaclass=Meta):\n    pass\ndef main():\n    return A()\n",
+            "class twice": "class A:\n    def foo(self):\n        return 1\na = A()\nclass A:\n    pass\ndef main():\n    return a.foo()\n",
+            "private name": "class A:\n    def go(self):\n        return self.__step()\n    def __step(self):\n        return 1\ndef main():\n    return A().go()\n",
+            "subclasses": "class A:\n    pass\ndef main():\n    return A.__subclasses__()\n",
+            "sys.modules": "import sys\ndef helper():\n    return 1\ndef main():\n    return sys.modules[__name__].helper()\n",
+            "globals": "def scan_a():\n    return 1\ndef main(kind):\n    return globals()['scan_' + kind]()\n",
+            "module getattr": "def __getattr__(name):\n    return 1\ndef main():\n    return 0\n",
+            "one line": "A = 1; B = 2\ndef main():\n    return B\n",
+        }
+        for name, source in cases.items():
+            with self.subTest(case=name):
+                with self.assertRaises(SystemExit) as stopped:
+                    extract_app.prune_unreachable(source, ("main",))
+                self.assertIn("takes nothing out rather than guess", str(stopped.exception))
+        # "x in globals()" only asks whether a name is there: the program's own use.
+        extract_app.prune_unreachable("def main():\n    return '__compiled__' in globals()\n", ("main",))
 
 
 class GeneratedProgramTests(unittest.TestCase):

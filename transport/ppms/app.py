@@ -20,14 +20,14 @@ import threading
 import time
 import tkinter as tk
 import weakref
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tkinter import filedialog, font as tkfont, messagebox, simpledialog, ttk
 from typing import Callable
-from transport.core.scan_sequences import build_round_trip_values, ppms_scan_axis
+from transport.core.scan_sequences import ppms_scan_axis
 from transport.core.scan_recording import WINDOWS_RESERVED_FILE_NAMES, ScanRunRecorder as _CoreScanRunRecorder, make_scan_run_folder as _make_scan_run_folder, scan_file_stem as _scan_file_stem, scan_log_line as _scan_log_line
 from transport.core.scan_lifecycle import ScanCloseHandoff, zero_scan_outputs, scan_end_outputs_text
-from transport.ppms.protocol import PPMS_FIELD_LIMIT_OE, PPMS_FIELD_RATE_LIMIT_OE_S, PPMS_TEMPERATURE_LOW_BOUNDARY_K, PPMS_TEMPERATURE_LOW_MAX_RATE_K_MIN, PPMS_TEMPERATURE_MAX_K, PPMS_TEMPERATURE_MAX_RATE_K_MIN, PPMS_TEMPERATURE_MIN_K, ppms_scan_temperature_segments, validate_ppms_field_command, validate_ppms_temperature_command
+from transport.ppms.protocol import PPMS_TEMPERATURE_LOW_BOUNDARY_K, PPMS_TEMPERATURE_LOW_MAX_RATE_K_MIN, PPMS_TEMPERATURE_MAX_RATE_K_MIN, ppms_scan_temperature_segments, validate_ppms_field_command, validate_ppms_temperature_command
 from transport.ppms.controllers.multivu import PPMSMultiVuReadbackController
 from transport.common.harmonics import DEFAULT_HARMONIC_CHOICES, DEFAULT_HARMONIC_LABELS, DEFAULT_HARMONIC_MODE_ORDERS, DEFAULT_HARMONIC_ORDERS, DEFAULT_SR830_HARMONIC_SETTING_KEYS, parse_harmonic_mode, schedule_harmonic_passes
 from transport.common.settling import calculate_lockin_settle_s, format_lockin_settle_text, format_settle_status_text
@@ -385,8 +385,6 @@ def _windows_drive_size(root: str) -> int:
     if not size(root, None, ctypes.byref(total), None):
         raise OSError("the drive's size could not be read")
     return int(total.value)
-def recycle_bin_available(folder) -> bool:
-    return not recycle_bin_refusal(folder)
 def move_folder_to_recycle_bin(folder, window_handle: int = 0) -> None:
     if sys.platform != "win32":
         raise OSError("There is no Recycle Bin on this computer.")
@@ -2155,12 +2153,6 @@ class STFMRSR830Controller(SafeVisaIdentityController):
             if self.instrument is not None:
                 show_sr830_x_and_y(self.instrument, self.logger, "STFMR SR830")
         return identity
-    @staticmethod
-    def _numbers(response: str, expected: int) -> list[float]:
-        values = [float(item.strip()) for item in str(response).split(",")]
-        if len(values) != expected or not all(math.isfinite(v) for v in values):
-            raise RuntimeError(f"SR830 readback cannot be parsed: {response!r}")
-        return values
     def configure(self, reference_input: str=STFMR_LOCKIN_SR830_DEFAULT_REFERENCE_INPUT, auto_range: bool=True, time_constant_code: int=STFMR_LOCKIN_SR830_TIME_CONSTANT_CODE) -> dict[str, object]:
         reference_input = str(reference_input).strip()
         if reference_input not in STFMR_LOCKIN_SR830_REFERENCE_INPUTS:
@@ -2218,115 +2210,6 @@ class STFMRSR830Controller(SafeVisaIdentityController):
                 "time_constant_index": actual_time_constant,
                 "auto_range": self.auto_range_enabled,
             }
-    def wait_for_reference(self, expected_frequency_hz: float, timeout_s: float=5.0, previous_frequency_hz: float | None=None) -> dict[str, object]:
-        expected = float(expected_frequency_hz)
-        if not math.isfinite(expected) or expected <= 0:
-            raise ValueError("SR830 expected reference frequency must be a finite positive number")
-        previous = None
-        if previous_frequency_hz is not None:
-            previous = float(previous_frequency_hz)
-            if not math.isfinite(previous) or previous == expected:
-                previous = None
-        deadline = time.monotonic() + max(float(timeout_s), 0.1)
-        frequency = math.nan
-        status = 8
-        while time.monotonic() < deadline:
-            with self.lock:
-                if self.instrument is None:
-                    raise RuntimeError("SR830 is not connected")
-                frequency = float(self.instrument.query("FREQ?").strip())
-                status = int(round(float(self.instrument.query('LIAS?').strip())))
-            left_previous = previous is None or abs(frequency - expected) < abs(frequency - previous)
-            if not status & 8 and left_previous and math.isclose(frequency, expected, rel_tol=0.005, abs_tol=0.1):
-                return {'frequency_hz': frequency, 'status': status, 'reference_input': self.reference_input}
-            time.sleep(0.1)
-        raise RuntimeError(
-            f"SR830 REF IN not locked: selected {self.reference_input}, "
-            f"expected {expected:g} Hz"
-            + (f" (previous {previous:g} Hz)" if previous is not None else "")
-            + f", readback {frequency:g} Hz, LIAS={status}; "
-            "please confirm that SMB100A LFO OUTPUT is connected to SR830 REF IN, "
-            "and select the Sine/TTL edge matching the waveform"
-        )
-    def _auto_range_locked(self, r_value: float, status: int, allow_down: bool=True) -> str:
-        if not self.auto_range_enabled:
-            return ""
-        old = int(self.sensitivity_index)
-        if not 0 <= old < len(NONLOCAL_SR830_FULL_SCALE_V):
-            raise RuntimeError(f"SR830 current SENS index is invalid: {old}")
-        utilization = abs(float(r_value)) / NONLOCAL_SR830_FULL_SCALE_V[old]
-        requested = old
-        reason = ""
-        overloaded = bool(status & 0x07)
-        floor = int(self.__dict__.get("overload_floor") or 0)
-        if overloaded or utilization >= LOCKIN_UPRANGE_FRACTION:
-            requested = min(old + 1, len(NONLOCAL_SR830_FULL_SCALE_V) - 1)
-            reason = "overload/high"
-            self.low_range_count = 0
-        elif not allow_down:
-            pass
-        elif self.range_cooldown > 0:
-            self.range_cooldown -= 1
-            self.low_range_count = 0
-        elif (utilization < LOCKIN_DOWNRANGE_FRACTION and old > floor and not status & 0x08):
-            self.low_range_count += 1
-            if self.low_range_count >= 3:
-                requested = old - 1
-                reason = "low"
-                self.low_range_count = 0
-        else:
-            self.low_range_count = 0
-        if requested == old:
-            return ""
-        self.instrument.write(f"SENS {requested}")
-        actual = int(round(float(self.instrument.query('SENS?').strip())))
-        if actual != requested:
-            raise RuntimeError(f'SR830 auto-range readback mismatch: requested {requested}, readback {actual}')
-        self.sensitivity_index = actual
-        self.range_cooldown = 3
-        self.lias_clear_pending = True
-        if overloaded and actual > old and utilization < LOCKIN_UPRANGE_FRACTION:
-            self.overload_floor = max(floor, actual)
-        return f"SENS {old}->{actual} ({reason})"
-    def new_pass(self) -> None:
-        with self.lock:
-            self.overload_floor = 0
-            self.lias_clear_pending = True
-    def auto_phase(self) -> float:
-        with self.lock:
-            if self.instrument is None:
-                raise RuntimeError("SR830 is not connected")
-            self.instrument.write("APHS")
-            time.sleep(0.25)
-            return float(self.instrument.query("PHAS?").strip())
-    def read_sample(self, expected_frequency_hz: float, auto_range: bool=True, allow_down: bool=True) -> dict[str, object]:
-        with self.lock:
-            if self.instrument is None:
-                raise RuntimeError("SR830 is not connected")
-            x, y, r_value, theta, frequency = self._numbers(self.instrument.query('SNAP? 1,2,3,4,9'), 5)
-            if self.__dict__.pop("lias_clear_pending", False):
-                self.instrument.query("LIAS?")
-            lias = int(round(float(self.instrument.query("LIAS?").strip())))
-            sensitivity_used = int(self.sensitivity_index)
-            auto_range_action = self._auto_range_locked(r_value, lias, allow_down) if auto_range else ''
-        reference_valid = not lias & 8 and math.isclose(frequency, float(expected_frequency_hz), rel_tol=0.005, abs_tol=0.1)
-        return {
-            "x_v": x,
-            "y_v": y,
-            "r_v": r_value,
-            "phase_deg": theta,
-            "reference_frequency_hz": frequency,
-            "reference_valid": reference_valid,
-            "status": lias,
-            "sensitivity_index": sensitivity_used,
-            "sensitivity_full_scale_v": NONLOCAL_SR830_FULL_SCALE_V[
-                sensitivity_used
-            ],
-            "auto_range": auto_range_action,
-            "measurement_valid": bool(
-                reference_valid and not (lias & 0x07) and not auto_range_action
-            ),
-        }
 class QDCommandUncertain(RuntimeError):
     pass
 class PPMSQDInstrumentReadbackController:
@@ -2450,18 +2333,6 @@ class PPMSQDInstrumentReadbackController:
             except (OSError, PermissionError):
                 continue
         return tuple(matches)
-    @classmethod
-    def locate_dll(cls, explicit_path: str = "") -> Path:
-        candidates = cls.candidate_dll_paths(explicit_path)
-        matches = cls.discover_dll_paths(explicit_path)
-        if matches:
-            return matches[0]
-        checked = "\n".join(f"  - {path}" for path in candidates)
-        raise RuntimeError(
-            "QDInstrument.dll was not found. Please select that DLL from the currently available LabVIEW QDInstrument "
-            "directory, or set the environment variable "
-            f"{PPMS_QDINSTRUMENT_DLL_ENV}. Checked:\n{checked}"
-        )
     @staticmethod
     def _import_qdinstrument_api():
         from QuantumDesign.QDInstrument import QDInstrumentBase, QDInstrumentFactory
@@ -3183,27 +3054,6 @@ def parse_ppms_macro(text):
     if not commands:
         raise ValueError("No runnable commands")
     return commands
-def build_ppms_field_scan_sequence(start_oe: float, end_oe: float, step_oe: float, loops: int):
-    """Build PPMS start→end→start field targets for each loop."""
-    start_oe = float(start_oe)
-    end_oe = float(end_oe)
-    step_oe = abs(float(step_oe))
-    loops = int(loops)
-    if not all(math.isfinite(value) for value in (start_oe, end_oe, step_oe)):
-        raise ValueError("PPMS start field, end field and step must be finite values")
-    if step_oe <= 0:
-        raise ValueError("PPMS field step must be greater than 0 Oe")
-    if not 1 <= loops <= 1000:
-        raise ValueError("PPMS scan loop count must be between 1 and 1000")
-    if abs(start_oe) > PPMS_FIELD_LIMIT_OE or abs(end_oe) > PPMS_FIELD_LIMIT_OE:
-        raise ValueError(f"PPMS start/end field must be within ±{PPMS_FIELD_LIMIT_OE:g} Oe")
-    cycle = build_round_trip_values(
-        start_oe, end_oe, step_oe, decimals=9, max_total_points=max(1, 100_000 // loops),
-        too_many_message="PPMS total scan points exceed 100000; please increase the step or reduce the loop count")
-    if len(cycle) * loops > 100000:
-        raise ValueError("PPMS total scan points exceed 100000; please increase the step or reduce the loop count")
-    return [(loop_index, point_index, len(cycle), float(target))
-            for loop_index in range(1, loops + 1) for point_index, target in enumerate(cycle, start=1)]
 def ppms_lockin_settle_s(settle_s, time_constants_s) -> float:
     """The wait before a scan point is read: Settle s, or LOCKIN_SETTLE_TAUS
     time constants of the slowest lock-in measured if that is longer."""
@@ -3793,19 +3643,8 @@ class NonLocalACController:
     def source_connected(self) -> bool:
         return self.source is not None
     @property
-    def any_connected(self) -> bool:
-        return self.source is not None or bool(self.lockins) or self.mfli_connected or (self.nanovoltmeter is not None)
-    @property
-    def shared_source_lockin_connected(self) -> bool:
-        return self.source is not None or bool(self.lockins)
-    @property
-    def nanovoltmeter_connected(self) -> bool:
-        return self.nanovoltmeter is not None
-    @property
     def mfli_connected(self) -> bool:
         return self.mfli_daq is not None or self.mfli_bridge is not None
-    def lockin_connected(self, key: str) -> bool:
-        return str(key) in self.lockins
     @property
     def connected_lockin_keys(self) -> tuple[str, ...]:
         return tuple(sorted(self.lockins, key=int))
@@ -3910,18 +3749,6 @@ class NonLocalACController:
                 "front_autozero": True,
                 "measurement_mode": "DC voltage (not phase-sensitive)",
             }
-    def read_nanovoltmeter(self) -> float:
-        with self.lock:
-            if self.nanovoltmeter is None:
-                raise RuntimeError("Keithley 2182A is not connected")
-            response = self.nanovoltmeter.query(":READ?").strip()
-            try:
-                value = float(response.split(",", 1)[0].strip())
-            except ValueError as error:
-                raise RuntimeError(f'2182A :READ? response cannot be parsed: {response!r}') from error
-            if not math.isfinite(value):
-                raise RuntimeError(f"2182A returned a non-finite voltage: {response!r}")
-            return value
     def _query_sr830_numbers(self, key: str, command: str, expected_count: int) -> tuple[float, ...]:
         lockin = self.lockins[key]
         last_response = ""
@@ -3945,44 +3772,6 @@ class NonLocalACController:
                     pass
                 time.sleep(0.08)
         raise RuntimeError(f'SR830 #{key} query {command!r} repeatedly returned non-numeric/abnormal replies: {last_response!r}') from last_error
-    def _query_sr830_status(self, key: str) -> int | None:
-        try:
-            value = self._query_sr830_numbers(key, "LIAS?", 1)[0]
-            if not (math.isfinite(value) and float(value).is_integer() and 0 <= value <= 255):
-                raise ValueError(f"not a status byte: {value!r}")
-            return int(value)
-        except Exception as error:
-            self.logger(f'SR830 #{key} LIAS? reply unreadable ({error}); not asked again (it clears as it is read): the reading counts as overloaded')
-            try:
-                self.lockins[key].clear()
-            except Exception:
-                pass
-            time.sleep(0.08)
-            return None
-    def read_sr830_time_constants(self, keys) -> dict[str, float]:
-        values = {}
-        with self.lock:
-            for key in keys:
-                key = str(key)
-                if key not in self.lockins:
-                    raise RuntimeError(f"SR830 #{key} is not connected")
-                code = int(self._query_sr830_numbers(key, "OFLT?", 1)[0])
-                if not 0 <= code < len(SR830_TIME_CONSTANTS_S):
-                    raise RuntimeError(f"SR830 #{key} time-constant readback is invalid: OFLT {code}")
-                values[key] = SR830_TIME_CONSTANTS_S[code]
-        return values
-    def read_sr830_filter_slopes(self, keys) -> dict[str, float]:
-        values = {}
-        with self.lock:
-            for key in keys:
-                key = str(key)
-                if key not in self.lockins:
-                    raise RuntimeError(f"SR830 #{key} is not connected")
-                code = int(self._query_sr830_numbers(key, "OFSL?", 1)[0])
-                if not 0 <= code <= 3:
-                    raise RuntimeError(f"SR830 #{key} filter-slope readback is invalid: OFSL {code}")
-                values[key] = 6.0 * (code + 1)
-        return values
     def _ensure_resource_manager(self):
         if pyvisa is None:
             raise RuntimeError("pyvisa is missing; please run: py -m pip install pyvisa pyvisa-py")
@@ -4066,38 +3855,6 @@ class NonLocalACController:
                 if lockin is not None:
                     try:
                         lockin.close()
-                    except BaseException:
-                        pass
-                self._close_manager_if_unused()
-                release_instrument_lease(resource, self)
-                raise
-    def connect_nanovoltmeter(self, resource: str) -> str:
-        with self.lock:
-            if self.nanovoltmeter is not None:
-                return self.nanovoltmeter_identity
-            acquire_instrument_lease(resource, self, "Non-local Keithley 2182A")
-            meter = None
-            try:
-                manager = self._ensure_resource_manager()
-                meter = manager.open_resource(resource)
-                self._configure_transport(meter)
-                identity = meter.query("*IDN?").strip()
-                if "2182" not in identity.upper():
-                    raise RuntimeError(f"{resource} is not a Keithley 2182A: {identity}")
-                try:
-                    meter.clear()
-                except Exception:
-                    pass
-                meter.write("*CLS")
-                self.nanovoltmeter = meter
-                self.nanovoltmeter_identity = identity
-                self.nanovoltmeter_resource = resource
-                self.logger(f"Non-local IV Keithley 2182A connected: {identity}")
-                return identity
-            except BaseException:
-                if meter is not None:
-                    try:
-                        meter.close()
                     except BaseException:
                         pass
                 self._close_manager_if_unused()
@@ -5048,110 +4805,6 @@ class NonLocalACController:
             if use_nanovoltmeter:
                 readbacks['2182'] = {'meter_type': '2182A', **self.configure_nanovoltmeter(channel=1, nplc=1.0)}
             return actual_frequency, readbacks
-    def set_current(self, rms_ma: float, frequency_hz: float) -> float:
-        with self.lock:
-            if not math.isfinite(float(rms_ma)):
-                raise ValueError("6221 current must be a finite value")
-            if self.source_output_mode == "DC":
-                if abs(float(rms_ma)) > 105.0:
-                    raise ValueError("6221 DC current must be within ±105 mA")
-                requested_a = float(rms_ma) * 1e-3
-                self.output_enabled = True
-                for command in (f'SOUR:CURR {requested_a:.12e}', 'OUTP ON'):
-                    self._write_6221(command)
-                output_state = int(self._query_float(self.source, "OUTP?"))
-                readback_a = self._query_float(self.source, "SOUR:CURR?")
-                if output_state != 1:
-                    raise RuntimeError("6221 DC output did not turn on successfully")
-                if not math.isclose(readback_a, requested_a, rel_tol=0.0005, abs_tol=1e-12):
-                    raise RuntimeError(f'6221 DC current readback mismatch: {readback_a:g} A')
-                self.output_enabled = True
-                return readback_a * 1e3
-            if float(rms_ma) <= 0:
-                raise ValueError("6221 AC RMS current must be a finite positive number")
-            if not 1e-3 <= float(frequency_hz) <= 1e5:
-                raise ValueError("6221 waveform frequency must be within 0.001–100000 Hz")
-            peak_a = math.sqrt(2.0) * float(rms_ma) * 1e-3
-            if peak_a > NONLOCAL_MAX_PEAK_A:
-                raise ValueError("6221 sine-wave peak exceeds 105 mA")
-            self.output_enabled = True
-            for command in ('SOUR:WAVE:ABOR', f'SOUR:WAVE:AMPL {peak_a:.12e}', 'SOUR:WAVE:ARM', 'SOUR:WAVE:INIT'):
-                self._write_6221(command)
-            if int(self._query_float(self.source, "OUTP?")) != 1:
-                raise RuntimeError("6221 sine wave did not turn on successfully")
-            actual_frequency = self._query_float(self.source, "SOUR:WAVE:FREQ?")
-            if not math.isclose(actual_frequency, frequency_hz, rel_tol=5e-3, abs_tol=0.1):
-                raise RuntimeError(f'6221 frequency readback mismatch: {actual_frequency:g} Hz')
-            self.output_enabled = True
-            peak_readback = self._query_float(self.source, "SOUR:WAVE:AMPL?")
-            if not math.isclose(peak_readback, peak_a, rel_tol=5e-4, abs_tol=1e-12):
-                raise RuntimeError(f'6221 current amplitude readback mismatch: {peak_readback:g} Apeak')
-            return peak_readback / math.sqrt(2.0) * 1e3
-    def wait_references(self, frequency_hz: float, stop_event: threading.Event, lockin_keys: tuple[str, ...] | None=None) -> dict[str, dict]:
-        keys = tuple(lockin_keys) if lockin_keys is not None else self.connected_lockin_keys
-        results = {key: self._wait_reference_one(key, frequency_hz, stop_event) for key in keys}
-        if self.mfli_connected and self.mfli_config and self.__dict__.get("mfli_in_scan"):
-            results['mfli'] = self._wait_mfli_reference(frequency_hz, stop_event)
-        return results
-    def _wait_mfli_reference(self, frequency_hz: float, stop_event: threading.Event) -> dict:
-        if self.mfli_initial_autorange_pending and not stop_event.is_set():
-            with self.lock:
-                action = self._run_mfli_autorange("initial")
-            self.logger(f"Non-local MFLI auto-range: {action}")
-        deadline = time.monotonic() + 5.0
-        last_sample = {
-            "reference_valid": False,
-            "reference_frequency_hz": math.nan,
-            "lia_status": 8,
-            "status_text": (
-                f"{self.mfli_config.get('reference_source', NONLOCAL_MFLI_DEFAULT_REFERENCE_INPUT)} "
-                "external reference not locked"
-            ),
-        }
-        while time.monotonic() < deadline and not stop_event.is_set():
-            with self.lock:
-                last_sample = self.read_mfli(frequency_hz)
-            if last_sample["reference_valid"]:
-                break
-            stop_event.wait(0.1)
-        return {
-            "valid": bool(last_sample["reference_valid"]),
-            "frequency_hz": float(last_sample["reference_frequency_hz"]),
-            "status": int(last_sample["lia_status"]),
-            "status_text": str(last_sample["status_text"]),
-            "reference_source": str(
-                self.mfli_config.get(
-                    "reference_source",
-                    NONLOCAL_MFLI_DEFAULT_REFERENCE_INPUT,
-                )
-            ),
-        }
-    def _wait_reference_one(self, key: str, frequency_hz: float, stop_event: threading.Event) -> dict:
-        deadline = time.monotonic() + 5.0
-        last_frequency = math.nan
-        last_status = 8
-        while time.monotonic() < deadline and not stop_event.is_set():
-            with self.lock:
-                lockin = self.lockins[key]
-                last_frequency = self._query_sr830_numbers(key, "FREQ?", 1)[0]
-                status = self._query_sr830_status(key)
-                last_status = self.SR830_LIAS_UNREADABLE if status is None else status
-            if not last_status & 8 and math.isclose(last_frequency, frequency_hz, rel_tol=0.005, abs_tol=0.1):
-                return {"valid": True, "frequency_hz": last_frequency, "status": last_status}
-            stop_event.wait(0.1)
-        return {"valid": False, "frequency_hz": last_frequency, "status": last_status}
-    @staticmethod
-    def _status_text(status: int) -> str:
-        labels = []
-        if status & 1:
-            labels.append("input/Reserve overload")
-        if status & 2:
-            labels.append("filter overload")
-        if status & 4:
-            labels.append("output overload")
-        if status & 8:
-            labels.append("reference not locked")
-        return "; ".join(labels) if labels else "OK"
     def _run_mfli_autorange(self, reason: str) -> str:
         if not self.mfli_connected:
             raise RuntimeError("Zurich MFLI is not connected")
@@ -5249,123 +4902,6 @@ class NonLocalACController:
             sample["auto_range"] = action
             sample["input_range_after_v"] = self.mfli_config["input_range_v"]
         return sample
-    def _auto_range(self, key: str, r_v: float, status: int) -> str:
-        old = self.sensitivity_indices[key]
-        utilization = abs(r_v) / NONLOCAL_SR830_FULL_SCALE_V[old]
-        requested = old
-        reason = ""
-        overloaded = bool(status & 0x07)
-        floors = self.__dict__.setdefault("overload_floors", {})
-        floor = int(floors.get(key) or 0)
-        if overloaded or utilization >= LOCKIN_UPRANGE_FRACTION:
-            requested = min(old + 1, len(NONLOCAL_SR830_FULL_SCALE_V) - 1)
-            reason = "overload/high"
-            self.low_range_counts[key] = 0
-        elif self.range_cooldowns[key] > 0:
-            self.range_cooldowns[key] -= 1
-            self.low_range_counts[key] = 0
-        elif utilization < LOCKIN_DOWNRANGE_FRACTION and old > floor and not status & 0x08:
-            self.low_range_counts[key] += 1
-            if self.low_range_counts[key] >= 3:
-                requested = old - 1
-                reason = "low"
-                self.low_range_counts[key] = 0
-        else:
-            self.low_range_counts[key] = 0
-        if requested != old:
-            self._write_sr830(key, f"SENS {requested}")
-            actual = int(self._query_sr830_numbers(key, "SENS?", 1)[0])
-            if actual != requested:
-                raise RuntimeError(f"SR830 #{key} auto-range readback is inconsistent")
-            self.sensitivity_indices[key] = actual
-            self.range_cooldowns[key] = 3
-            self.lias_clear_pending[key] = True
-            if overloaded and actual > old and utilization < LOCKIN_UPRANGE_FRACTION:
-                floors[key] = max(floor, actual)
-            return f"SENS {old}->{actual} ({reason})"
-        return ""
-    def read_samples(self, expected_frequency_hz: float, measurement_keys: tuple[str, ...] | None=None) -> dict[str, dict]:
-        with self.lock:
-            keys = tuple(measurement_keys) if measurement_keys is not None else self.connected_lockin_keys
-            output_on = int(self._query_float(self.source, "OUTP?")) == 1
-            measurement_condition = int(self._query_float(self.source, 'STAT:MEAS:COND?'))
-            samples = {}
-            for key in keys:
-                if key == "2182":
-                    voltage = self.read_nanovoltmeter()
-                    samples[key] = {
-                        "meter_type": "2182A",
-                        "voltage": voltage,
-                        "X": math.nan,
-                        "Y": math.nan,
-                        "R": voltage,
-                        "phase_deg": math.nan,
-                        "reference_frequency_hz": math.nan,
-                        "lia_status": 0,
-                        "status_text": "2182A DC sample (not AC lock-in)",
-                        "reference_valid": True,
-                        "measurement_valid": not bool(measurement_condition & 8),
-                        "output_on": output_on,
-                        "measurement_condition": measurement_condition,
-                        "in_compliance": bool(measurement_condition & 8),
-                        "sensitivity_index": "",
-                        "auto_range": "",
-                    }
-                elif key == "mfli":
-                    sample = self.read_mfli(expected_frequency_hz)
-                    if sample.get('input_overload') is True and self.__dict__.get('mfli_auto_range_enabled', True):
-                        sample["auto_range"] = self._run_mfli_autorange("input overload")
-                    elif sample.get("input_extrema_valid", True):
-                        sample["auto_range"] = self._auto_range_mfli(sample)
-                    else:
-                        sample["auto_range"] = ""
-                    sample.update(output_on=output_on, measurement_condition=measurement_condition, in_compliance=bool(measurement_condition & 8))
-                    sample["measurement_valid"] = bool(
-                        sample["reference_valid"]
-                        and not sample["lia_status"]
-                        and not sample["in_compliance"]
-                        and not sample["auto_range"]
-                        and sample.get("input_overload") is not True
-                    )
-                    samples[key] = sample
-                else:
-                    sample = self._read_sample_one(key, expected_frequency_hz, output_on, measurement_condition)
-                    sample["meter_type"] = "SR830"
-                    sample["voltage"] = sample["R"]
-                    samples[key] = sample
-            return samples
-    def _read_sample_one(self, key: str, expected_frequency_hz: float, output_on: bool, measurement_condition: int) -> dict:
-        lockin = self.lockins[key]
-        values = self._query_sr830_numbers(key, "SNAP? 1,2,3,4,9", 5)
-        if self.lias_clear_pending.pop(key, False):
-            self._query_sr830_status(key)
-        status = self._query_sr830_status(key)
-        unreadable = status is None
-        if unreadable:
-            status = self.SR830_LIAS_UNREADABLE
-        sensitivity_used = self.sensitivity_indices[key]
-        auto_action = self._auto_range(key, values[2], 0x08 if unreadable else status)
-        reference_valid = not status & 8 and math.isclose(values[4], expected_frequency_hz, rel_tol=0.005, abs_tol=0.1)
-        in_compliance = bool(measurement_condition & 8)
-        return {
-            "lockin_key": key,
-            "X": values[0], "Y": values[1], "R": values[2],
-            "phase_deg": values[3], "reference_frequency_hz": values[4],
-            "lia_status": status,
-            "status_text": (
-                "LIAS? unreadable: counted as overloaded" if unreadable else self._status_text(status)
-            ),
-            "reference_valid": reference_valid, "output_on": output_on,
-            "measurement_condition": measurement_condition,
-            "in_compliance": in_compliance,
-            "measurement_valid": bool(
-                reference_valid
-                and not (status & 0x07)
-                and not in_compliance
-                and not auto_action
-            ),
-            "sensitivity_index": sensitivity_used, "auto_range": auto_action,
-        }
     def mfli_has_multi_demod(self) -> bool:
         with self.lock:
             options = str(self.mfli_props.get("options", "")).upper()
@@ -5386,52 +4922,6 @@ class NonLocalACController:
                 except BaseException:
                     has_demod_4 = False
             return bool(has_demod_4)
-    def update_amplitude(self, rms_ma: float) -> float:
-        with self.lock:
-            sweep_peak_a = getattr(self, "sweep_peak_a", None)
-            if self.source_output_mode != "AC" or sweep_peak_a is None:
-                raise RuntimeError("The 6221 is not set up for a continuous current sweep")
-            rms_ma = float(rms_ma)
-            if not math.isfinite(rms_ma) or rms_ma <= 0:
-                raise ValueError("6221 AC RMS current must be a finite positive number")
-            peak_a = math.sqrt(2.0) * rms_ma * 1e-3
-            if peak_a > sweep_peak_a * (1 + 1e-9):
-                raise ValueError("6221 current exceeds the range reserved for the sweep")
-            if int(self._query_float(self.source, "OUTP?")) != 1:
-                raise RuntimeError("6221 output is off; the current sweep cannot continue")
-            self._write_6221(f"SOUR:WAVE:AMPL {peak_a:.12e}")
-            actual = self._query_float(self.source, "SOUR:WAVE:AMPL?")
-            if not math.isclose(actual, peak_a, rel_tol=5e-4, abs_tol=1e-12):
-                raise RuntimeError(f"6221 live amplitude readback mismatch: {actual:g} Apeak")
-            if int(self._query_float(self.source, "OUTP?")) != 1:
-                raise RuntimeError("6221 output stopped during the amplitude update")
-            return actual / math.sqrt(2.0) * 1e3
-    def set_lockin_harmonic(self, key: str, harmonic: int, sensitivity_index: int | None=None) -> None:
-        harmonic = int(harmonic)
-        if not 1 <= harmonic <= 19999:
-            raise ValueError(f"SR830 #{key} harmonic must be within 1–19999")
-        sensitivity = 9 if sensitivity_index is None else int(sensitivity_index)
-        if not 0 <= sensitivity <= 26:
-            raise ValueError(f"SR830 #{key} sensitivity index must be within 0–26")
-        with self.lock:
-            if key not in self.lockins:
-                raise RuntimeError(f"SR830 #{key} is not connected")
-            self._write_sr830(key, f"HARM {harmonic}")
-            actual = int(self._query_sr830_numbers(key, "HARM?", 1)[0])
-            if actual != harmonic:
-                raise RuntimeError(f'SR830 #{key} harmonic readback mismatch: requested {harmonic}, readback {actual}')
-            self._write_sr830(key, f"SENS {sensitivity}")
-            self.sensitivity_indices[key] = int(self._query_sr830_numbers(key, "SENS?", 1)[0])
-            self.lias_clear_pending[key] = True
-            self.low_range_counts[key] = 0
-            self.range_cooldowns[key] = 0
-            floors = self.__dict__.setdefault("overload_floors", {})
-            memory = self.__dict__.setdefault("overload_floor_memory", {})
-            harmonics = self.__dict__.setdefault("lockin_harmonics", {})
-            if key in harmonics:
-                memory[(key, harmonics[key])] = int(floors.get(key) or 0)
-            floors[key] = 0 if sensitivity_index is None else int(memory.get((key, harmonic)) or 0)
-            harmonics[key] = harmonic
     def output_off(self) -> None:
         with self.lock:
             if self.source is None:
@@ -5445,16 +4935,6 @@ class NonLocalACController:
             self.output_enabled = False
             if errors:
                 raise RuntimeError("6221 failed to turn output off: " + "; ".join(errors))
-    def confirm_output_off(self, context: str) -> None:
-        with self.lock:
-            if self.source is None:
-                raise RuntimeError("6221 is not connected")
-            output_state = int(round(self._query_float(self.source, "OUTP?")))
-            if output_state != 0 or self.output_enabled:
-                self.output_off()
-                output_state = int(round(self._query_float(self.source, "OUTP?")))
-            if output_state != 0:
-                raise RuntimeError(f'6221 output is still ON {context}; the Non-local Keithley action is forbidden')
     def disconnect(self) -> None:
         with self.lock:
             source, manager = self.source, self.resource_manager
@@ -5585,29 +5065,6 @@ class NonLocalACController:
             release_instrument_lease(resource, self)
             self._close_manager_if_unused()
             self.logger(f"Non-local IV SR830 #{key} disconnected")
-    def disconnect_nanovoltmeter(self) -> None:
-        with self.lock:
-            meter = self.nanovoltmeter
-            resource = self.nanovoltmeter_resource
-            if meter is None:
-                self.nanovoltmeter_resource = ""
-                release_instrument_lease(resource, self)
-                self._close_manager_if_unused()
-                return
-            try:
-                meter.write("*CLS")
-            except BaseException:
-                pass
-            try:
-                meter.close()
-            except BaseException:
-                pass
-            self.nanovoltmeter = None
-            self.nanovoltmeter_identity = ""
-            self.nanovoltmeter_resource = ""
-            release_instrument_lease(resource, self)
-            self._close_manager_if_unused()
-            self.logger("Non-local IV Keithley 2182A disconnected")
     def disconnect_mfli(self) -> None:
         with self.lock:
             daq = self.mfli_daq
@@ -6955,64 +6412,6 @@ class CombinedControlApp:
     NONLOCAL_SCAN_NAMES = {'resistance': ('|R| vs time', 'NL_RvsT'), 'iv': ('2400-IV', 'NL_2400IV'), 'iv6221': ('6221-IV', 'NL_6221IV'), 'gate': ('Gate-VI', 'NL_GateVI')}
     NONLOCAL_RESISTANCE_COLUMNS = ('point', 'elapsed_s', 'source_current_A', 'voltage_V', 'current_A', 'resistance_Ohm', 'timestamp')
     NONLOCAL_IV_COLUMNS = ('point', 'set_voltage_V', 'source_voltage_V', 'current_A', 'elapsed_s', 'at_current_limit')
-    def select_ppms_qdinstrument_dll(self) -> None:
-        current = self.ppms_qdinstrument_dll_var.get().strip()
-        initial_directory = None
-        if current:
-            current_path = Path(current)
-            if current_path.parent.is_dir():
-                initial_directory = str(current_path.parent)
-        selected = filedialog.askopenfilename(
-            parent=self.root,
-            title="Select the QDInstrument.dll currently used by LabVIEW",
-            initialdir=initial_directory,
-            filetypes=(("QDInstrument DLL", "QDInstrument.dll"), ("DLL", "*.dll")),
-        )
-        if selected:
-            self.ppms_qdinstrument_dll_var.set(selected)
-    def auto_find_ppms_qdinstrument_dll(self) -> None:
-        if self.ppms_environment_busy:
-            return
-        self.ppms_environment_busy = True
-        self.ppms_connection_var.set("Searching for QDInstrument.dll (time-limited)…")
-        self._set_ppms_environment_ui(False)
-        explicit = self.ppms_qdinstrument_dll_var.get().strip()
-        future = self.ppms_executor.submit(PPMSQDInstrumentReadbackController.discover_dll_paths, explicit, recursive=True, time_limit_s=12.0, max_results=8)
-        def finished() -> None:
-            self.ppms_environment_busy = False
-            try:
-                matches = future.result()
-            except BaseException as error:
-                self.ppms_connection_var.set(f'DLL search failed: {short_status_error(error, 100)}')
-                self._set_ppms_environment_ui(False)
-                if not self.closing:
-                    messagebox.showerror('QDInstrument auto-search', str(error), parent=self.root)
-                return
-            self._set_ppms_environment_ui(False)
-            if matches:
-                selected = str(matches[0])
-                self.ppms_qdinstrument_dll_var.set(selected)
-                self.ppms_connection_var.set(f"DLL found: {selected}")
-                if len(matches) > 1 and not self.closing:
-                    options = "\n".join(f"  - {path}" for path in matches)
-                    messagebox.showinfo(
-                        "QDInstrument auto-search",
-                        "Several QDInstrument.dll copies were found; the first one was selected. If it does not match the LabVIEW "
-                        f"version, please pick the correct one manually:\n{options}",
-                        parent=self.root,
-                    )
-                return
-            self.ppms_connection_var.set("DLL not found; you may leave the field empty and try .NET auto-loading")
-            if not self.closing:
-                messagebox.showwarning(
-                    "QDInstrument auto-search",
-                    "The time-limited search did not find QDInstrument.dll. A reachable TCP 11000 does not mean this PC "
-                    "has the client assembly. Search the folder of the original LabVIEW control VI for "
-                    "QDInstrument.dll, select it or copy it next to this program. If the assembly is already "
-                    "installed on the .NET search path, you may also leave the field empty and connect directly.",
-                    parent=self.root,
-                )
-        future.add_done_callback(lambda _future: self.post_ui(finished))
     def _on_ppms_backend_changed(self, _event=None) -> None:
         backend = self.ppms_backend_var.get()
         if backend == PPMS_QDINSTRUMENT_BACKEND:
@@ -7639,11 +7038,6 @@ class CombinedControlApp:
             if key in getattr(self, "ppms_sr830_status_vars", {}):
                 text = str(values)
                 self.ppms_sr830_status_vars[key].set(text if 'OVERLOAD' in text else text.split(' / ')[-1])
-    @staticmethod
-    def _ppms_voltage_text(value):
-        magnitude = abs(value)
-        scale, unit = (1, "V") if magnitude >= 1 else ((1e3, "mV") if magnitude >= 1e-3 else (1e6, "µV"))
-        return f"{value*scale:+.6g} {unit}"
     def _read_ppms_current_display(self):
         source = self.ppms_instrument_controllers["6221"]
         self.ppms_6221_zero_output = False
@@ -9554,8 +8948,6 @@ class CombinedControlApp:
         self.post_ui(lambda: self.ppms_transport_status_var.set(f'Transport acquisition: 6221 OFF (read back); setting up {frequency:g} Hz'))
         self._configure_ppms_transport_scan(settings)
         self._ppms_wait_zurich_reference(frequency, float(settings.get('reference_timeout_s', PPMS_TRANSPORT_REFERENCE_TIMEOUT_S)), previous_hz)
-    def _ppms_wait_zurich_reference(self, frequency, timeout_s, previous_hz=None):
-        return None
     def _average_ppms_transport_sample(self, frequency, lockins, duration):
         start = call_start = time.monotonic()
         range_limit_s = PPMS_SR830_RANGE_LIMIT_S
@@ -10577,17 +9969,6 @@ class PPMSPanel(CombinedControlApp):
         self._set_connection_indicator('zurich_reference', bool(sample['reference_valid']), fault=bool(sample.get('input_overload')))
         if 'zurich_range_var' in self.__dict__:
             self.zurich_range_var.set('Autorange ' + self._format_voltage_range(sample.get('input_range_v')))
-    def _ppms2_ordered_plot_rows(self):
-        selected = [key for key in (*PPMS_SR830_KEYS, 'zurich') if key in self.ppms_lockin_selection and self.ppms_lockin_selection[key].get()]
-        order = [key for key in self.__dict__.get('ppms_selection_order', []) if key in selected]
-        order.extend(key for key in selected if key not in order)
-        self.ppms_selection_order = order
-        mode = str(self.zurich_harmonic.get()) if 'zurich_harmonic' in self.__dict__ else '1'
-        rows = []
-        for key in order:
-            suffixes = ('', '_2', '_3') if key == 'zurich' and mode == '1+2+3' else ('', '_2') if key == 'zurich' and mode == '1+2' else ('',)
-            rows.extend((key, suffix) for suffix in suffixes)
-        return rows
     def _ppms2_measured_orders(self) -> dict:
         selections = self.__dict__.get('ppms_lockin_selection', {})
         orders: dict = {}
@@ -10640,9 +10021,6 @@ class PPMSPanel(CombinedControlApp):
     def _ppms_apply_selected_harmonic(self, key):
         self._refresh_ppms2_plot_layout()
         super()._ppms_apply_selected_harmonic(key)
-    @staticmethod
-    def _ppms2_finite(value):
-        return value if isinstance(value, (int, float)) and math.isfinite(value) else None
     def _ppms2_prefix_resolver(self, meter, order):
         order_text = str(order)
         if meter != 'zurich':
@@ -10664,8 +10042,6 @@ class PPMSPanel(CombinedControlApp):
                 return order_prefix
             return 'zurich_' if mode == order_text else None
         return resolve
-    def _ppms2_meter_prefix(self, meter, order, row):
-        return self._ppms2_prefix_resolver(meter, order)(row)
     def _ppms2_meter_address(self, meter):
         address = self.__dict__.get('ppms_plot_addresses', {}).get(meter)
         if address is None:
@@ -10674,11 +10050,6 @@ class PPMSPanel(CombinedControlApp):
             except (ValueError, AttributeError, KeyError):
                 return None
         return address
-    def _ppms2_meter_value(self, meter, order, channel, row):
-        prefix = self._ppms2_meter_prefix(meter, order, row)
-        if prefix is None:
-            return None
-        return self._ppms2_finite(row.get(prefix + ('theta_deg' if channel == 'theta' else f'{channel}_v')))
     def _redraw_ppms_transport_plot(self):
         canvases = self.__dict__.get('ppms_harmonic_canvases')
         if not canvases:

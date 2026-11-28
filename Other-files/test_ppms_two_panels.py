@@ -158,28 +158,6 @@ class TwoPanelTests(unittest.TestCase):
             for frame in panel.ppms_transport_plot_frames.values():
                 self.assertIn('1st harmonic', frame.configure.call_args.kwargs['text'])
 
-    def test_participation_click_order_and_reselection(self):
-        from itertools import permutations
-        for sequence in permutations(('830_a', '830_b', 'zurich')):
-            _, panel, _ = self.make_panel()
-            for var in panel.ppms_lockin_selection.values():
-                var.set(False)
-            self.assertEqual(panel._ppms2_ordered_plot_rows(), [])
-            panel.zurich_harmonic.set('1+2+3')
-            for key in sequence:
-                panel.ppms_lockin_selection[key].set(True)
-                panel._ppms2_ordered_plot_rows()
-            expected = [(k, suffix) for k in sequence for suffix in (('', '_2', '_3') if k == 'zurich' else ('',))]
-            self.assertEqual(panel._ppms2_ordered_plot_rows(), expected)
-            first = sequence[0]
-            panel.ppms_lockin_selection[first].set(False)
-            panel._ppms2_ordered_plot_rows()
-            panel.ppms_lockin_selection[first].set(True)
-            panel._ppms2_ordered_plot_rows()
-            self.assertEqual(panel.ppms_selection_order, list(sequence[1:]) + [first])
-            panel.zurich_harmonic.set('1')
-            self.assertEqual([k for k, suffix in panel._ppms2_ordered_plot_rows()], list(sequence[1:]) + [first])
-
     def test_temperature_shades_follow_values_not_acquisition_order(self):
         panel = app.CombinedControlApp.__new__(app.CombinedControlApp)
         panel.ppms_active_scan_mode = 'Field+Temperature'

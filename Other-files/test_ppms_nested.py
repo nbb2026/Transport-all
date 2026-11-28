@@ -570,10 +570,6 @@ class NestedTests(unittest.TestCase):
                 self.run_worker(obj, motor, settings)
             self.assertNotIn(('zero',), events)
 
-    def test_voltage_units(self):
-        self.assertIn('µV', app.CombinedControlApp._ppms_voltage_text(1e-6))
-        self.assertIn('mV', app.CombinedControlApp._ppms_voltage_text(-.01))
-
     def test_first_point_repeats_windows_until_two_agree(self):
         obj = app.CombinedControlApp.__new__(app.CombinedControlApp)
         obj.post_ui = lambda callback: None

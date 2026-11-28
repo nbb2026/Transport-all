@@ -311,7 +311,8 @@ class StartTests(unittest.TestCase):
         self.assertEqual(app.PPMS_ROTATOR_MOVE_ALLOWANCE_S, 1.0)
 
     def test_the_limits(self):
-        limit = f"{app.PPMS_FIELD_LIMIT_OE:g}"
+        from transport.ppms.protocol import PPMS_FIELD_LIMIT_OE
+        limit = f"{PPMS_FIELD_LIMIT_OE:g}"
         for kwargs, expected in (
                 (dict(outer=("0", "100000", "50000")), f"Outer field 100000 Oe: PPMS target field must be within ±{limit} Oe"),
                 (dict(outer=("-90000", "0", "90000")), "Outer field -90000 Oe"),

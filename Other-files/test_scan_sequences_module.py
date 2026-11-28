@@ -7,8 +7,6 @@ from transport.core.scan_sequences import build_round_trip_values
 
 
 class SharedScanSequenceTests(unittest.TestCase):
-    def test_legacy_entry_point_reexports_identical_callable(self):
-        self.assertIs(app.build_round_trip_values, build_round_trip_values)
 
     def test_non_divisible_step_includes_endpoint_without_overshoot(self):
         self.assertEqual(

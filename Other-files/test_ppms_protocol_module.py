@@ -170,14 +170,9 @@ class TestPPMSProtocolModule(unittest.TestCase):
         self.assertIs(app.validate_ppms_field_command, validate_ppms_field_command)
         self.assertIs(app.ppms_scan_temperature_segments, ppms_scan_temperature_segments)
 
-        self.assertEqual(app.PPMS_TEMPERATURE_MIN_K, PPMS_TEMPERATURE_MIN_K)
-        self.assertEqual(app.PPMS_TEMPERATURE_MAX_K, PPMS_TEMPERATURE_MAX_K)
         self.assertEqual(app.PPMS_TEMPERATURE_LOW_BOUNDARY_K, PPMS_TEMPERATURE_LOW_BOUNDARY_K)
         self.assertEqual(app.PPMS_TEMPERATURE_MAX_RATE_K_MIN, PPMS_TEMPERATURE_MAX_RATE_K_MIN)
         self.assertEqual(app.PPMS_TEMPERATURE_LOW_MAX_RATE_K_MIN, PPMS_TEMPERATURE_LOW_MAX_RATE_K_MIN)
-        self.assertEqual(app.PPMS_FIELD_LIMIT_OE, PPMS_FIELD_LIMIT_OE)
-        self.assertEqual(app.PPMS_FIELD_RATE_LIMIT_OE_S, PPMS_FIELD_RATE_LIMIT_OE_S)
-
 
 if __name__ == "__main__":
     unittest.main()

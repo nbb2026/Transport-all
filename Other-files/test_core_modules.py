@@ -13,8 +13,8 @@ from transport.core import scan_lifecycle, scan_recording, scan_sequences
 
 
 class CoreImportsTests(unittest.TestCase):
+
     def test_legacy_scan_helpers_are_shared(self):
-        self.assertIs(app.build_round_trip_values, scan_sequences.build_round_trip_values)
         self.assertIs(app.ppms_scan_axis, scan_sequences.ppms_scan_axis)
 
     def test_scan_planning_unchanged(self):

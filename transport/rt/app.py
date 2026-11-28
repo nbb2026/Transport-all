@@ -5814,8 +5814,33 @@ class ScanRunRecorder(_CoreScanRunRecorder):
     def _opened(self) -> None:
         _OPEN_SCAN_RUNS.add(self)
 class SHHVScanRecorder(ScanRunRecorder):
+    # A run of this program: <parent>/<stem>/ with <stem>.csv and <stem>.log (the package's recorder), and every
+    # other file of the run as <stem>_<part>.<extension>.  A blank name is <page>_<date>_<time>.
     def __init__(self, parent: Path, stem: str, page: str = "SHHV") -> None:
         super().__init__(parent, page, stem)
+
+    @property
+    def stem(self) -> str:
+        return self.directory.name
+
+    def part_path(self, part: str, extension: str) -> Path:
+        return self.directory / f"{self.stem}_{part}.{extension}"
+
+    def append_part_rows(self, part: str, header, rows) -> Path:
+        # Rows onto <stem>_<part>.csv, as append_row writes the live CSV: under the lock, UTF-8 with a BOM, flushed
+        # and synced before it returns; the header when the file is new.
+        with self.lock:
+            if self.closed:
+                raise RuntimeError(f"The {self.label} run is closed")
+            path = self.part_path(part, "csv")
+            new = not path.exists()
+            with path.open("a", newline="", encoding="utf-8-sig") as handle:
+                writer = csv.writer(handle)
+                if new:
+                    writer.writerow(header)
+                writer.writerows(rows)
+                self._sync(handle)
+            return path
 PAIR_FLIP_LIMIT = 8
 class CombinedControlApp:
     def __init__(self, root: tk.Tk) -> None:
@@ -7098,22 +7123,6 @@ class CombinedControlApp:
             previous = sample
         self.thread_log(f'PPMS first point did not settle within {PPMS_FIRST_POINT_MAX_WINDOWS} windows; keeping the last one')
         return sample, PPMS_FIRST_POINT_MAX_WINDOWS
-    def _append_ppms_live_csv(self, row):
-        path = getattr(self, "ppms_live_csv_path", None)
-        if path is None:
-            raise RuntimeError("No live CSV file selected; acquisition stopped")
-        first = self.ppms_live_csv_fields is None
-        fields = list(row) if first else self.ppms_live_csv_fields
-        if set(row) != set(fields):
-            raise RuntimeError("Live CSV channels changed; appending stopped to avoid misaligned columns")
-        with path.open("a", newline="", encoding="utf-8-sig") as handle:
-            writer = csv.DictWriter(handle, fieldnames=fields)
-            if first:
-                writer.writeheader()
-            writer.writerow(row)
-            handle.flush()
-            os.fsync(handle.fileno())
-        self.ppms_live_csv_fields = fields
     def _set_ppms_device_ui(self, key: str, connected: bool) -> None:
         self._set_connection_indicator(f"ppms_{key}", connected)
         if not connected and key in PPMS_SR830_KEYS:
@@ -7344,7 +7353,7 @@ class CombinedControlApp:
     def save_communication_log(self) -> None:
         path = filedialog.asksaveasfilename(
             parent=self.root, title="Save the full program log (including lines buffered while paused)",
-            initialfile=time.strftime("Transport_log_%Y%m%d_%H%M%S.txt"),
+            initialfile=time.strftime("Transport_RT_log_%Y%m%d_%H%M%S.txt"),
             defaultextension=".txt", filetypes=(("Text", "*.txt"),))
         if not path:
             return
@@ -9657,6 +9666,13 @@ class RTEPanel(PPMSPanel):
             shown[key] = new
             if key == 'harmonic_a':
                 self._ppms_apply_selected_harmonic('830_a')
+    def _rte_run_name(self) -> str:
+        return self.__dict__.get('rte_measurement') or self.ppms_page_name
+    def _append_ppms_live_csv(self, row):
+        recorder = self.__dict__.get('rte_recorder')
+        if recorder is None:
+            raise RuntimeError('No run is open; the point was not saved and the scan stopped')
+        recorder.append_row(row)
     def _rte_scan_time_default(self, key, mode) -> str:
         own = RTE_MEASUREMENT_START.get(self.__dict__.get('rte_measurement'), {}).get(key, {}).get(mode)
         if own:
@@ -10694,13 +10710,13 @@ class RTEPanel(PPMSPanel):
                     f'{NEWMARK_SPEED_DEG_S:g}°/s, to each angle counted from the stage zero (absolute moves, all '
                     f'within ±{NEWMARK_CABLE_LIMIT_DEG:g}° of it). Can the wires follow?\n\nStart the scan?', f'at least {least_text}', parent=self.root):
                 return
-        folder = filedialog.askdirectory(parent=self.root, title=f'{self.ppms_page_name} live CSV folder')
+        folder = filedialog.askdirectory(parent=self.root, title=f'{self._rte_run_name()}: folder to save the run in')
         if not folder:
             return
-        typed = ask_scan_file_stem(self.root, f'{self.ppms_page_name} file name')
+        typed = ask_scan_file_stem(self.root, f'{self._rte_run_name()}: file name')
         if typed is None:
             return
-        stem = typed or time.strftime(f"{self.__dict__.get('rte_measurement') or self.ppms_page_name}_%Y%m%d_%H%M%S")
+        run_name = self._rte_run_name()
         try:
             run_settings = self._rte_run_settings(mode, plan, passes, settings, limit, field_current, stable, duration, pass_settles, settle_s, typed, outer=outer)
             run_settings['magnet_supply'] = self._rte_magnet_settings(supply, mode, ramp_rate, ramp_s)
@@ -10720,16 +10736,16 @@ class RTEPanel(PPMSPanel):
                     order='read current off, pulse, read current on again, settle, read',
                     read_settle_s=switch_settle_s, read_settle_time_constants=SWITCH_READ_SETTLE_TAUS)
         except Exception as error:
-            messagebox.showerror(f'{self.ppms_page_name} run log', f'Could not gather the settings for the run log; the scan was not started: {error}', parent=self.root)
+            messagebox.showerror(f'{self._rte_run_name()}: run log', f'Could not gather the settings for the run log; the scan was not started: {error}', parent=self.root)
             return
         self.ppms_field_scan_stop_event.clear()
         if turns:
             self.rte_stage_stop_event.clear()
         def begin(stage_check_mst=None):
             try:
-                recorder = SHHVScanRecorder(Path(folder), stem, self.ppms_page_name)
+                recorder = SHHVScanRecorder(Path(folder), typed, run_name)
             except OSError as error:
-                self._rte_dialog(f'{self.ppms_page_name} run folder', f'Could not create the run folder and its files; the scan was not started: {error}')
+                self._rte_dialog(f'{self._rte_run_name()}: run folder', f'Could not create the run folder and its files; the scan was not started: {error}')
                 return
             prepared = dict(run_settings, run_folder=str(recorder.directory), csv_path=str(recorder.csv_path), log_path=str(recorder.log_path))
             if turns:
@@ -10738,12 +10754,11 @@ class RTEPanel(PPMSPanel):
             if not recorder.event('run_prepared', **prepared):
                 problem = recorder.failure
                 recorder.close('not_started', error=str(problem))
-                self._rte_dialog(f'{self.ppms_page_name} run folder', f'Could not write the run log; the scan was not started: {problem}')
+                self._rte_dialog(f'{self._rte_run_name()}: run folder', f'Could not write the run log; the scan was not started: {problem}')
                 return
             self.rte_recorder, self.rte_run_folder = recorder, recorder.directory
             self.rte_scan_supply_label = supply.label
             path = recorder.csv_path
-            self.ppms_live_csv_path, self.ppms_live_csv_fields = path, None
             self.ppms_field_scan_running = True
             self.ppms_active_scan_mode = mode
             self.ppms_plot_axis = 'field' if mode in RTE_FIELD_SWEEP_MODES else 'angle' if angle else rte_pulse_axis(mode) if switch else 'current'
@@ -11131,7 +11146,7 @@ class RTEPanel(PPMSPanel):
         recorder = self.__dict__.get('rte_recorder')
         if recorder is None or self.__dict__.get('rte_switch_trace_failed'):
             return
-        path = recorder.directory / f'{recorder.csv_path.stem}_trace.csv'
+        path = recorder.part_path('trace', 'csv')
         point = f'#{progress} {pulse_ma:+g} {unit}'
 
         def quantity(name, read=''):
@@ -11142,14 +11157,8 @@ class RTEPanel(PPMSPanel):
                   for name in sorted(row) if name.startswith('sr830_') and name.endswith(('_x_v', '_y_v'))
                   and isinstance(row[name], (int, float))]
         try:
-            new = not path.exists()
-            with path.open('a', newline='', encoding='utf-8') as handle:
-                writer = csv.writer(handle)
-                if new:
-                    writer.writerow(SWITCH_TRACE_COLUMNS)
-                writer.writerows(lines)
-            self.rte_switch_trace_path = path
-        except OSError as error:
+            self.rte_switch_trace_path = recorder.append_part_rows('trace', SWITCH_TRACE_COLUMNS, lines)
+        except (OSError, RuntimeError) as error:
             self.rte_switch_trace_failed = True
             self.thread_log(f'{self.ppms_page_name}: the trace CSV {path.name} could not be written ({error}); the plots keep the readings')
     def _rte_switch_resistance(self, row, settings, point_settings):
@@ -11429,7 +11438,7 @@ class RTEPanel(PPMSPanel):
             problem = '; '.join(errors)
             self.thread_log(f'{self.ppms_page_name} run log: {problem}')
             if not self.closing and not self.rte_closed:
-                self._rte_dialog(f'{self.ppms_page_name} run log', f'The run log was not closed cleanly: {problem}\n\nThe live CSV keeps every saved point: {recorder.csv_path}')
+                self._rte_dialog(f'{self._rte_run_name()}: run log', f'The run log was not closed cleanly: {problem}\n\nThe live CSV keeps every saved point: {recorder.csv_path}')
     def thread_log(self, message):
         super().thread_log(message)
         self._rte_log('note', text=message)
@@ -11878,8 +11887,8 @@ class RTEPanel(PPMSPanel):
             return
         folder = self.__dict__.get('rte_run_folder')
         where = {'initialdir': str(folder)} if folder is not None and Path(folder).is_dir() else {}
-        path = filedialog.asksaveasfilename(parent=self.root, title=f'Save {self.ppms_page_name} CSV as',
-            defaultextension='.csv', filetypes=(('CSV', '*.csv'),), initialfile=time.strftime(f"{self.ppms_field_scan_rows[0].get('measurement') or self.ppms_page_name}_%Y%m%d_%H%M%S.csv"),
+        path = filedialog.asksaveasfilename(parent=self.root, title=f"{self.ppms_field_scan_rows[0].get('measurement') or self.ppms_page_name}: save CSV as",
+            defaultextension='.csv', filetypes=(('CSV', '*.csv'),), initialfile=f'{Path(folder).name}_copy.csv' if where else time.strftime(f"{self.ppms_field_scan_rows[0].get('measurement') or self.ppms_page_name}_%Y%m%d_%H%M%S.csv"),
             **where)
         if not path:
             return
@@ -11889,7 +11898,7 @@ class RTEPanel(PPMSPanel):
                 writer.writeheader()
                 writer.writerows(self.ppms_field_scan_rows)
         except OSError as error:
-            messagebox.showerror(f'{self.ppms_page_name} CSV export', str(error), parent=self.root)
+            messagebox.showerror(f"{self.ppms_field_scan_rows[0].get('measurement') or self.ppms_page_name}: CSV export", str(error), parent=self.root)
     def safe_close_ppms(self):
         if self.rte_closed:
             return

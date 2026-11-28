@@ -422,9 +422,11 @@ class RTE(unittest.TestCase):
                            f'zurich_demod{i}_x_v': i*1e-9 if i < 4 else '',
                            f'zurich_demod{i}_status': 'OK' if i < 4 else 'disabled'})
         with tempfile.TemporaryDirectory() as tmp:
-            panel.ppms_live_csv_path = Path(tmp) / 'rte.csv'
+            # The page saves a row through the run's recorder (2026-11-28), so the worker needs an open run.
+            panel.rte_recorder = recorder = app.SHHVScanRecorder(Path(tmp), 'rte')
             panel._rte_scan_worker('Current', ((1, 1, 1.),), self.settings(), 5., 0., 1.)
-            with panel.ppms_live_csv_path.open(encoding='utf-8-sig', newline='') as f:
+            self.assertEqual(recorder.csv_path, Path(tmp) / 'rte' / 'rte.csv')
+            with recorder.csv_path.open(encoding='utf-8-sig', newline='') as f:
                 rows = list(csv.DictReader(f))
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]['zurich_demod4_x_v'], '')

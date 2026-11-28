@@ -17,7 +17,10 @@ The saved rows and the run's settings name the measurement.
 These tests use test_rte_angle_end_to_end's harness (stand-in widgets, no
 window); test_rt_measurement_tabs.py builds the real window for the tabs."""
 import json
+import csv
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import test_rte_angle_end_to_end as ete
@@ -449,13 +452,87 @@ class SavedWithTheScan(ete.EndToEnd):
         self.assertTrue(h.panel.rte_set_measurement("SHHV"))
         with patch.object(app.filedialog, "asksaveasfilename", return_value="") as ask:
             h.panel.save_ppms_field_scan_csv()
-        self.assertRegex(ask.call_args.kwargs["initialfile"], r"^PHE_\d{8}_\d{6}\.csv$")
+        # ... in its title; the file suggested is the run's own name with _copy (2026-11-28).
+        self.assertEqual(ask.call_args.kwargs["title"], "PHE: save CSV as")
+        self.assertEqual(ask.call_args.kwargs["initialfile"], f"{folder.name}_copy.csv")
+        self.assertEqual(ask.call_args.kwargs["initialdir"], str(folder))
 
     def test_a_typed_file_name_is_kept_in_every_measurement(self):
         h = self.in_phe()
         self.start(h)
         self.assertEqual(h.showerror.call_args_list, [])
         self.assertEqual(h.panel.rte_run_folder.name, "angle")
+
+    def test_the_questions_at_the_start_are_named_after_the_measurement(self):
+        """User, 2026-11-28: "standardize the file-saving logic ... ensure that the file and variable naming
+        conventions are consistent".  The folder and the name were asked as "SHHV live CSV folder" and "SHHV
+        file name" on every tab, while the files were named after the tab."""
+        h = self.in_phe()
+        made = []
+        real = app.SHHVScanRecorder
+        with patch.object(app.filedialog, "askdirectory", return_value=h.folder.name) as where, \
+                patch.object(app.simpledialog, "askstring", return_value="") as name, \
+                patch.object(app, "SHHVScanRecorder", side_effect=lambda *args: made.append(real(*args)) or made[-1]):
+            self.start(h)
+        self.assertEqual(h.showerror.call_args_list, [])
+        self.assertEqual(where.call_args.kwargs["title"], "PHE: folder to save the run in")
+        self.assertEqual(name.call_args.args[0], "PHE: file name")
+        # One name, asked once, also names the run and the recorder's messages; the blank name's date and time
+        # are the recorder's.
+        (recorder,) = made
+        self.assertEqual((recorder.page, recorder.label), ("PHE", "PHE"))
+        self.assertRegex(recorder.stem, r"^PHE_\d{8}_\d{6}$")
+        self.assertEqual(recorder.directory, h.panel.rte_run_folder)
+        # Every row went through the recorder: it counted them, and the page keeps no path or header of its own.
+        rows = self.rows(h)
+        self.assertEqual(recorder.rows_written, len(rows))
+        self.assertGreater(len(rows), 0)
+        self.assertEqual(recorder.fieldnames, list(rows[0]))
+        self.assertNotIn("ppms_live_csv_path", h.panel.__dict__)
+        self.assertTrue(recorder.closed)
+
+    def test_a_row_without_an_open_run_stops_the_scan(self):
+        panel = self.make().panel
+        panel.__dict__.pop("rte_recorder", None)
+        with self.assertRaisesRegex(RuntimeError, "No run is open; the point was not saved"):
+            panel._append_ppms_live_csv({"a": 1})
+
+    def test_every_other_file_of_a_run_is_stem_part_extension(self):
+        with tempfile.TemporaryDirectory() as folder:
+            first = app.SHHVScanRecorder(Path(folder), "loop", "Switch-OOP")
+            second = app.SHHVScanRecorder(Path(folder), "loop", "Switch-OOP")      # the name is taken: loop_01
+            self.assertEqual((first.stem, second.stem), ("loop", "loop_01"))
+            self.assertEqual(second.csv_path, Path(folder) / "loop_01" / "loop_01.csv")
+            self.assertEqual(second.part_path("trace", "csv"), Path(folder) / "loop_01" / "loop_01_trace.csv")
+            self.assertEqual(second.part_path("plots_snapshot", "png").name, "loop_01_plots_snapshot.png")
+            # The trace CSV is written as the live CSV is: header once, the byte-order mark, appended, on the disk.
+            path = first.append_part_rows("trace", app.SWITCH_TRACE_COLUMNS, [("0.100", "SR830 #9 X", "1e-06", "V", "#1 +24 mA")])
+            self.assertEqual(first.append_part_rows("trace", app.SWITCH_TRACE_COLUMNS, [("0.200", "SR830 #9 Y", "2e-06", "V", "#1 +24 mA")]), path)
+            self.assertEqual(path, Path(folder) / "loop" / "loop_trace.csv")
+            self.assertTrue(path.read_bytes().startswith(b"\xef\xbb\xbf"))
+            first.append_row({"module": "SHHV", "measurement": "Switch-OOP"})
+            self.assertTrue(first.csv_path.read_bytes().startswith(b"\xef\xbb\xbf"))
+            with path.open(encoding="utf-8-sig", newline="") as handle:
+                lines = list(csv.reader(handle))
+            self.assertEqual(lines, [list(app.SWITCH_TRACE_COLUMNS), ["0.100", "SR830 #9 X", "1e-06", "V", "#1 +24 mA"],
+                                     ["0.200", "SR830 #9 Y", "2e-06", "V", "#1 +24 mA"]])
+            # A closed run takes nothing more, as its live CSV.
+            first.close("completed")
+            with self.assertRaisesRegex(RuntimeError, "The Switch-OOP run is closed"):
+                first.append_part_rows("trace", app.SWITCH_TRACE_COLUMNS, [])
+            second.close("completed")
+
+    def test_the_page_has_one_writer_and_the_names_of_the_program(self):
+        with open(app.__file__, encoding="utf-8") as source:
+            text = source.read()
+        # The recorder's part writer and Save CSV as: no other CSV is written in this module.
+        self.assertEqual((text.count("csv.writer("), text.count("csv.DictWriter(")), (1, 1))
+        self.assertNotIn("ppms_live_csv_path", text)
+        self.assertNotIn("ppms_live_csv_fields", text)
+        self.assertNotIn("live CSV folder", text)
+        # The program log's suggested name is this program's.
+        self.assertIn("Transport_RT_log_%Y%m%d_%H%M%S.txt", text)
+        self.assertNotIn('"Transport_log_', text)
 
     def test_every_measurements_name_is_a_valid_file_name(self):
         for name in app.RTE_MEASUREMENTS:

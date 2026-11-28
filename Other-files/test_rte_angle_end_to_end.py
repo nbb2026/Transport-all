@@ -367,8 +367,8 @@ class EndToEnd(unittest.TestCase):
 
     @staticmethod
     def rows(h):
-        path = h.panel.ppms_live_csv_path
-        with path.open(encoding="utf-8-sig", newline="") as handle:
+        folder = h.panel.rte_run_folder          # <folder>/<stem>/<stem>.csv
+        with (folder / f"{folder.name}.csv").open(encoding="utf-8-sig", newline="") as handle:
             return list(csv.DictReader(handle))
 
     @staticmethod
@@ -701,7 +701,6 @@ class RunLogTests(RunLogBase):
         self.assertEqual(panel.rte_run_folder, folder)
         self.assertEqual(sorted(p.name for p in Path(h.folder.name).iterdir()), ["angle"])
         self.assertEqual(sorted(p.name for p in folder.iterdir()), ["angle.csv", "angle.log"])
-        self.assertEqual(panel.ppms_live_csv_path, folder / "angle.csv")
         self.assertEqual(len(self.rows(h)), 5, "the live CSV as before, in the folder")
         events = self.events(h)
         expected = ["run_prepared", "scan_started", "harmonic_pass", "field_programmed", "field_settled"]
@@ -815,7 +814,7 @@ class RunLogTests(RunLogBase):
         with patch.object(app.filedialog, "askdirectory", return_value=str(missing)):
             self.start(h)
         h.showerror.assert_called_once()
-        self.assertEqual(h.showerror.call_args.args[0], "SHHV run folder")
+        self.assertEqual(h.showerror.call_args.args[0], "SHHV: run folder")
         self.assertIn("the scan was not started", h.showerror.call_args.args[1])
         self.assertEqual([e for e in h.log if e[0] in ("6221", "kepco", "lockins")], [], "nothing switched on")
         self.assertEqual([e for e in h.log if e[:2] == ("stage", "move")], [])
@@ -833,7 +832,7 @@ class RunLogTests(RunLogBase):
             return real(name, details)
         with patch.object(app, "scan_log_line", line):
             self.start(h)
-        self.assertEqual(h.showerror.call_args.args[0], "SHHV run folder")
+        self.assertEqual(h.showerror.call_args.args[0], "SHHV: run folder")
         self.assertIn("Could not write the run log", h.showerror.call_args.args[1])
         self.assertEqual([e for e in h.log if e[0] in ("6221", "kepco", "lockins", "stage")], [])
         folder = Path(h.folder.name) / "angle"

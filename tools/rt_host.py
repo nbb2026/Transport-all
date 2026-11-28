@@ -65,6 +65,10 @@ EXTRA_IMPORTS = (
 # so it does not group under the main program's button when both are open.
 REPLACE = {
     "'NH.ProfChen.MagnetoElectroOpticalMicrowaveTransport'": "'NH.ProfChen.TransportRT'",
+    # Files are named after the program or the measurement that made them (see "How a run is saved" below).
+    '"Transport_log_%Y%m%d_%H%M%S.txt"': '"Transport_RT_log_%Y%m%d_%H%M%S.txt"',
+    "f'{self.ppms_page_name} run folder'": "f'{self._rte_run_name()}: run folder'",
+    "f'{self.ppms_page_name} run log'": "f'{self._rte_run_name()}: run log'",
 }
 
 # Changes to the main program's text made before the extraction (old text, new text; each old text occurs once).
@@ -190,6 +194,13 @@ SOURCE_REPLACE = (
          '            shown[key] = new\n'
          "            if key == 'harmonic_a':\n"
          "                self._ppms_apply_selected_harmonic('830_a')\n"
+         '    def _rte_run_name(self) -> str:\n'
+         "        return self.__dict__.get('rte_measurement') or self.ppms_page_name\n"
+         '    def _append_ppms_live_csv(self, row):\n'
+         "        recorder = self.__dict__.get('rte_recorder')\n"
+         '        if recorder is None:\n'
+         "            raise RuntimeError('No run is open; the point was not saved and the scan stopped')\n"
+         '        recorder.append_row(row)\n'
          '    def _rte_scan_time_default(self, key, mode) -> str:\n'
          "        own = RTE_MEASUREMENT_START.get(self.__dict__.get('rte_measurement'), {}).get(key, {}).get(mode)\n"
          '        if own:\n'
@@ -330,10 +341,51 @@ SOURCE_REPLACE = (
         '                self.rte_settle_default_shown = new\n'
     ),
      '        self._rte_follow_scan_times(mode)\n'),
+    # How a run is saved (user, 2026-11-28: "standardize the file-saving logic across all parts of the code and ensure
+    # that the file and variable naming conventions are consistent"):
+    # - one name: the measurement's (the tab's), in the two questions at the start, in a blank name's
+    #   <name>_<date>_<time>, in the error windows about the run's files and in Save CSV as;
+    # - one writer: the run's recorder (SHHVScanRecorder below) makes the folder and writes the live CSV, the log
+    #   and the Switch scans' trace CSV, each under its lock, flushed to the disk, the CSVs as UTF-8 with a BOM;
+    # - one rule for file names: <folder>/<stem>/<stem>.csv, <stem>.log and <stem>_<part>.<ext> for the rest
+    #   (<stem>_trace.csv, <stem>_plots_snapshot.png, Save CSV as: <stem>_copy.csv).
+    # The names of the files and of the CSV's columns and the log's fields are as they were: the analysis scripts
+    # read them.
+    ("        folder = filedialog.askdirectory(parent=self.root, title=f'{self.ppms_page_name} live CSV folder')\n",
+     "        folder = filedialog.askdirectory(parent=self.root, title=f'{self._rte_run_name()}: folder to save the run in')\n"),
+    ("        typed = ask_scan_file_stem(self.root, f'{self.ppms_page_name} file name')\n",
+     "        typed = ask_scan_file_stem(self.root, f'{self._rte_run_name()}: file name')\n"),
     ("        stem = typed or time.strftime(f'{self.ppms_page_name}_%Y%m%d_%H%M%S')\n",
-     "        stem = typed or time.strftime(f\"{self.__dict__.get('rte_measurement') or self.ppms_page_name}_%Y%m%d_%H%M%S\")\n"),
+     '        run_name = self._rte_run_name()\n'),
+    ('                recorder = SHHVScanRecorder(Path(folder), stem, self.ppms_page_name)\n',
+     '                recorder = SHHVScanRecorder(Path(folder), typed, run_name)\n'),
+    ('            self.ppms_live_csv_path, self.ppms_live_csv_fields = path, None\n', ''),
+    ((
+        "        path = recorder.directory / f'{recorder.csv_path.stem}_trace.csv'\n"
+    ),
+     "        path = recorder.part_path('trace', 'csv')\n"),
+    ((
+        '        try:\n'
+        '            new = not path.exists()\n'
+        "            with path.open('a', newline='', encoding='utf-8') as handle:\n"
+        '                writer = csv.writer(handle)\n'
+        '                if new:\n'
+        '                    writer.writerow(SWITCH_TRACE_COLUMNS)\n'
+        '                writer.writerows(lines)\n'
+        '            self.rte_switch_trace_path = path\n'
+        '        except OSError as error:\n'
+    ),
+     (
+         '        try:\n'
+         "            self.rte_switch_trace_path = recorder.append_part_rows('trace', SWITCH_TRACE_COLUMNS, lines)\n"
+         '        except (OSError, RuntimeError) as error:\n'
+     )),
+    ("title=f'Save {self.ppms_page_name} CSV as'",
+     "title=f\"{self.ppms_field_scan_rows[0].get('measurement') or self.ppms_page_name}: save CSV as\""),
     ("initialfile=time.strftime(f'{self.ppms_page_name}_%Y%m%d_%H%M%S.csv'),",
-     "initialfile=time.strftime(f\"{self.ppms_field_scan_rows[0].get('measurement') or self.ppms_page_name}_%Y%m%d_%H%M%S.csv\"),"),
+     "initialfile=f'{Path(folder).name}_copy.csv' if where else time.strftime(f\"{self.ppms_field_scan_rows[0].get('measurement') or self.ppms_page_name}_%Y%m%d_%H%M%S.csv\"),"),
+    ("f'{self.ppms_page_name} CSV export'",
+     "f\"{self.ppms_field_scan_rows[0].get('measurement') or self.ppms_page_name}: CSV export\""),
 )
 
 MAIN_WINDOW_TITLE = "Transport_RT_NH"
@@ -394,6 +446,36 @@ SWITCH_LOOP_DEFAULT_FIELDS_G = "200"
 RTE_LIVE_WIDE_CHARS = 48
 # The Pulse us box is one box for the Switch scans and Apply pulse, on every tab.
 SWITCH_DEFAULT_PULSE_WIDTH_US = 1000.0
+
+
+class SHHVScanRecorder(ScanRunRecorder):
+    # A run of this program: <parent>/<stem>/ with <stem>.csv and <stem>.log (the package's recorder), and every
+    # other file of the run as <stem>_<part>.<extension>.  A blank name is <page>_<date>_<time>.
+    def __init__(self, parent: Path, stem: str, page: str = "SHHV") -> None:
+        super().__init__(parent, page, stem)
+
+    @property
+    def stem(self) -> str:
+        return self.directory.name
+
+    def part_path(self, part: str, extension: str) -> Path:
+        return self.directory / f"{self.stem}_{part}.{extension}"
+
+    def append_part_rows(self, part: str, header, rows) -> Path:
+        # Rows onto <stem>_<part>.csv, as append_row writes the live CSV: under the lock, UTF-8 with a BOM, flushed
+        # and synced before it returns; the header when the file is new.
+        with self.lock:
+            if self.closed:
+                raise RuntimeError(f"The {self.label} run is closed")
+            path = self.part_path(part, "csv")
+            new = not path.exists()
+            with path.open("a", newline="", encoding="utf-8-sig") as handle:
+                writer = csv.writer(handle)
+                if new:
+                    writer.writerow(header)
+                writer.writerows(rows)
+                self._sync(handle)
+            return path
 
 
 class CombinedControlApp:

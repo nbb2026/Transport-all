@@ -584,7 +584,9 @@ class SwitchScanTests(SwitchScan):
         trace = h.panel.rte_switch_trace_path
         self.assertEqual(trace.name, h.panel.rte_recorder.csv_path.stem + "_trace.csv") if h.panel.__dict__.get(
             "rte_recorder") else self.assertTrue(trace.name.endswith("_trace.csv"))
-        with trace.open(encoding="utf-8", newline="") as handle:
+        # Since 2026-11-28 with the byte-order mark the live CSV has: the recorder writes both.
+        self.assertTrue(trace.read_bytes().startswith(b"\xef\xbb\xbf"))
+        with trace.open(encoding="utf-8-sig", newline="") as handle:
             lines = list(app.csv.reader(handle))
         self.assertEqual(lines[0], ["time_s", "quantity", "value", "unit", "point"])
         self.assertEqual(sum(1 for line in lines if line[1] == "SR830 #8 X"), 30)

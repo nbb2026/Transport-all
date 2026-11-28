@@ -83,6 +83,18 @@ Scan box (user, 2026-11-27):
 - They are one page: the instruments stay connected, and the settings stay as
   they are, when another measurement's tab is chosen. Only the list of scans
   and the plots' title follow the measurement. The program starts on SHHV.
+- **How a run is saved** (one rule since 2026-11-28). The folder and the file
+  name are asked under the measurement's name ("AHE: folder to save the run
+  in", "AHE: file name"). The run is `<folder>/<name>/` (`<name>_01`, ... when
+  taken) with `<name>.csv` (one row per point), `<name>.log` (JSON lines) and,
+  for the rest, `<name>_<part>.<ext>`: `<name>_trace.csv` (Switch scans: every
+  lock-in reading), `<name>_plots_snapshot.png`. A blank name is
+  `<measurement>_<date>_<time>`. One object, the run's recorder, makes the
+  folder and writes the CSV, the log and the trace CSV: under one lock, each
+  write on the disk before it returns, the CSVs as UTF-8 with a byte-order
+  mark (the trace CSV had none before). Save CSV as suggests
+  `<name>_copy.csv` in the run folder; the program log `Transport_RT_log_<date>_<time>.txt`.
+  The names of the CSV's columns and of the log's fields are unchanged.
 - **Switch-OOP** opens as the user's figure of 2026-11-28: Switch-loop from 24
   to -24 mA in 2 mA steps and back, 1 loop, Settle s 10, Acquire s 10, outer
   field 500 G; and, from the figure of 2026-11-27, 1000 µs pulses, read

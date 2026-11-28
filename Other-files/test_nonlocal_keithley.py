@@ -201,142 +201,12 @@ class SweepControllerTests(unittest.TestCase):
         self.meter = FakeSourceMeter()
         self.controller = connected_controller(self.meter)
 
-    def test_start_sets_the_limit_and_checks_the_ovp(self):
-        self.controller.start_iv_sweep(1e-6)
-        commands = self.meter.commands
-        self.assertEqual(commands[0], "*RST", "from a known state")
-        for command in (":SOUR:VOLT:PROT 20", ":SOUR:VOLT:RANG 20", ":SENS:CURR:PROT 1e-06",
-                        ":SENS:CURR:NPLC 1", ":OUTP ON"):
-            self.assertIn(command, commands)
-        self.assertLess(commands.index(":SOUR:VOLT 0"), commands.index(":OUTP ON"), "on at 0 V")
-        self.assertEqual(self.meter.output, 1)
-        self.controller.set_iv_voltage(-6)
-        self.assertEqual(self.controller.read_iv_point(), (-6.0, -6e-9))
-        with self.assertRaisesRegex(ValueError, "within ±20 V"):
-            self.controller.set_iv_voltage(20.5)
-
-    def test_a_wrong_ovp_or_limit_stops_before_the_output_is_on(self):
-        with self.assertRaisesRegex(ValueError, "at most 0.1 A"):
-            self.controller.start_iv_sweep(0.5)
-        meter = FakeSourceMeter()
-        meter.write = (lambda original: lambda command: original(
-            ":SOUR:VOLT:PROT 40" if command.startswith(":SOUR:VOLT:PROT") else command))(meter.write)
-        controller = connected_controller(meter)
-        with self.assertRaisesRegex(RuntimeError, "reads OVP 40 V"):
-            controller.start_iv_sweep(1e-3)
-        self.assertEqual(meter.output, 0)
-
     def start(self, model, limit_a, max_abs_v):
         meter = FakeSourceMeter()
         controller = connected_controller(meter)
         controller.model = model
         controller.start_iv_sweep(limit_a, max_abs_v)
         return meter, controller
-
-    def test_above_20_v_the_high_range_and_the_ovp_level_above_the_sweep(self):
-        # User, 2026-10-09: ±200 V on a 2400, ±1000 V on a 2410.
-        for model, max_abs_v, source_range, ovp in (
-            # Above ±20 V the OVP level is at least 5 % above the voltages
-            # (the levels are ±5 %): 160 V on a 2400 takes "none" (210 V).
-            ("2400", 20, 21.0, 20.0), ("2400", 40, 210.0, 60.0), ("2400", 50, 210.0, 60.0),
-            ("2400", 150, 210.0, 160.0), ("2400", 160, 210.0, 210.0), ("2400", 200, 210.0, 210.0),
-            ("2410", 150, 1100.0, 200.0), ("2410", 1000, 1100.0, 1100.0),
-        ):
-            with self.subTest(model=model, max_abs_v=max_abs_v):
-                meter, controller = self.start(model, 1e-3, max_abs_v)
-                self.assertEqual((meter.range, meter.ovp), (source_range, ovp))
-                self.assertLess(meter.commands.index(f":SOUR:VOLT:PROT {ovp:g}" if ovp != 20 else ":SOUR:VOLT:PROT 20"),
-                                meter.commands.index(":OUTP ON"), "set before the output goes on")
-                controller.set_iv_voltage(-max_abs_v)
-                with self.assertRaisesRegex(ValueError, f"within ±{max_abs_v:g} V"):
-                    controller.set_iv_voltage(max_abs_v + 0.5)
-                controller.restore_voltage_mode()
-                self.assertEqual((meter.output, meter.range, meter.ovp), (0, 21.0, 20.0), "back to the pulse setup")
-                self.assertEqual(controller.iv_sweep_max_abs_v, 20.0)
-
-    def test_the_model_limits_and_the_high_range_current_limit(self):
-        for model, too_high in (("2400", 200.5), ("2410", 1000.5)):
-            with self.assertRaisesRegex(ValueError, "must be within"):
-                self.start(model, 1e-3, too_high)
-        with self.assertRaisesRegex(ValueError, "at most 0.021 A on the Keithley 2410's 1000 V range"):
-            self.start("2410", 0.05, 100)
-        self.start("2410", 0.05, 20)   # 20 V range: up to 0.1 A
-        self.start("2400", 0.1, 200)
-
-    def test_an_ovp_below_the_sweep_stops_before_the_output_is_on(self):
-        meter = FakeSourceMeter()
-        meter.write = (lambda original: lambda command: original(
-            ":SOUR:VOLT:PROT 160" if command.startswith(":SOUR:VOLT:PROT 210") else command))(meter.write)
-        controller = connected_controller(meter)
-        controller.model = "2400"
-        with self.assertRaisesRegex(RuntimeError, "reads 160 V, not the 210 V"):
-            controller.start_iv_sweep(1e-3, 200)
-        self.assertEqual(meter.output, 0)
-
-    def test_set_leaves_the_output_on_at_the_voltage(self):
-        # User, 2026-10-09: a 2400 voltage left on, from 2400-IV settings.
-        meter = FakeSourceMeter()
-        controller = connected_controller(meter)
-        controller.model = "2400"
-        self.assertEqual(controller.set_dc_voltage(50, 1e-3), (50.0, 5e-8))
-        self.assertEqual((meter.output, meter.voltage, meter.range, meter.ovp), (1, 50.0, 210.0, 60.0))
-        self.assertLess(meter.commands.index(":SOUR:VOLT:PROT 60"), meter.commands.index(":OUTP ON"))
-        self.assertLess(meter.commands.index(":OUTP ON"), meter.commands.index(":SOUR:VOLT 50"),
-                        "on at 0 V, then the voltage")
-        with self.assertRaisesRegex(ValueError, "within ±200 V"):
-            controller.set_dc_voltage(250, 1e-3)
-        controller.model = "2410"
-        with self.assertRaisesRegex(ValueError, "at most 0.021 A"):
-            controller.set_dc_voltage(500, 0.05)
-
-    def test_after_high_voltage_the_output_drains_at_0_v_before_it_goes_off(self):
-        # Review, 2026-10-09: a charged sample is drained, not left at 1000 V.
-        meter = FakeSourceMeter()
-        controller = connected_controller(meter)
-        controller.model = "2410"
-        controller.set_dc_voltage(-1000, 1e-3)
-        with mock.patch.object(app.time, "sleep", lambda s: meter.commands.append(f"sleep {s:g}")):
-            meter.commands.clear()
-            controller.safe_shutdown(reset=False)
-            # 1 s, then until two readings are off the current limit.
-            self.assertEqual(meter.commands, [":SOUR:VOLT 0", "sleep 1", "sleep 0.2", ":OUTP OFF"])
-            # The next setup (*RST switches off at once) drains first too.
-            controller.set_dc_voltage(500, 1e-3)
-            meter.commands.clear()
-            controller.setup_voltage_mode(1e-3)
-            self.assertEqual(meter.commands[:5], [":SOUR:VOLT 0", "sleep 1", "sleep 0.2", ":OUTP OFF", "*RST"])
-            self.assertFalse(controller.high_voltage_active)
-            # Up to ±20 V nothing waits.
-            controller.set_dc_voltage(5, 1e-3)
-            meter.commands.clear()
-            controller.safe_shutdown(reset=False)
-            self.assertEqual(meter.commands, [":SOUR:VOLT 0", ":OUTP OFF"])
-
-    def test_the_drain_waits_while_the_current_is_at_the_limit(self):
-        # Review, 2026-10-09: a low Current limit A drains slowly; the output
-        # stays at 0 V until the current is off the limit (the terminals at
-        # 0 V), and a sample still charged after 30 s is reported.
-        clock = [0.0]
-        meter = FakeSourceMeter()
-        controller = connected_controller(meter)
-        controller.model = "2400"
-        controller.set_dc_voltage(100, 1e-6)
-        readings = iter(["0,-1.0e-06"] * 5 + ["0,-2.0e-07"] * 2)
-        original = meter.query
-        meter.query = lambda command: next(readings) if command.upper() == ":READ?" else original(command)
-        fake_time = mock.Mock(monotonic=lambda: clock[0], sleep=lambda s: clock.__setitem__(0, clock[0] + s))
-        with mock.patch.object(app, "time", fake_time):
-            controller.safe_shutdown(reset=False)
-        # 1 s, five readings at the limit, then two off it (0.2 s apart).
-        self.assertAlmostEqual(clock[0], 1.0 + 6 * 0.2, places=6, msg="1 s, then until off the limit")
-        self.assertEqual(meter.output, 0)
-        meter.query = original
-        controller.set_dc_voltage(100, 1e-6)
-        meter.query = lambda command: "0,-1.0e-06" if command.upper() == ":READ?" else original(command)
-        with mock.patch.object(app, "time", fake_time), \
-                self.assertRaisesRegex(RuntimeError, "may still be charged"):
-            controller.safe_shutdown(reset=False)
-        self.assertEqual(meter.output, 0, "switched off all the same")
 
     def test_an_output_found_on_is_drained_before_the_reset(self):
         meter = FakeSourceMeter()
@@ -346,82 +216,6 @@ class SweepControllerTests(unittest.TestCase):
             controller.setup_voltage_mode(1e-3)
         self.assertEqual(meter.commands[:3], [":SOUR:VOLT 0", "sleep 1", "sleep 0.2"])
         self.assertLess(meter.commands.index(":OUTP OFF"), meter.commands.index("*RST"))
-
-    def test_every_pulse_ends_drained(self):
-        # User, 2026-10-09: drain every pulse, ±20 V and below included.
-        meter = FakeSourceMeter()
-        controller = connected_controller(meter)
-        controller.model = "2400"
-        controller.setup_voltage_mode(1e-3)
-        with mock.patch.object(app.time, "sleep", lambda s: meter.commands.append(f"sleep {s:g}")):
-            meter.commands.clear()
-            controller.apply_voltage_pulse(5, 0.0, threading.Event())
-        end = meter.commands[meter.commands.index(":SOUR:VOLT 5"):]
-        self.assertEqual(end[1:5], [":SOUR:VOLT 0", "sleep 1", "sleep 0.2", ":OUTP OFF"])
-        self.assertEqual(meter.output, 0)
-        self.assertFalse(controller.high_voltage_active, "drained: no second drain")
-
-    def test_no_drain_with_the_output_already_off(self):
-        # Review, 2026-10-09: a Stop before the pulse's output went on, or a
-        # drain that timed out, must not leave the drain flag stuck.
-        meter = FakeSourceMeter()
-        controller = connected_controller(meter)
-        controller.model = "2400"
-        controller.setup_voltage_mode(1e-3)
-        stop = threading.Event()
-        stop.set()
-        with mock.patch.object(app.time, "sleep", lambda s: meter.commands.append(f"sleep {s:g}")):
-            with self.assertRaises(app.NonLocalVIStopped):
-                controller.apply_voltage_pulse(100, 0.0, stop)
-            self.assertNotIn("sleep 1", meter.commands, "nothing to drain: never on")
-            self.assertFalse(controller.high_voltage_active)
-            controller.high_voltage_active = True   # e.g. after a drain timeout
-            controller.safe_shutdown(reset=False)
-            self.assertNotIn("sleep 1", meter.commands)
-            self.assertFalse(controller.high_voltage_active, "cleared: the output reads off")
-            controller.setup_voltage_mode(1e-3)    # usable again at once
-
-    def test_a_failed_set_leaves_the_output_off(self):
-        meter = FakeSourceMeter()
-        meter.query = (lambda original: lambda command: (
-            "2e-3" if command.upper() == ":SENS:CURR:PROT?" else original(command)))(meter.query)
-        controller = connected_controller(meter)
-        controller.model = "2400"
-        with self.assertRaisesRegex(RuntimeError, "current limit reads"):
-            controller.set_dc_voltage(50, 1e-3)
-        self.assertEqual(meter.output, 0)
-
-    def test_each_pulse_takes_its_own_range_and_ovp(self):
-        meter = FakeSourceMeter()
-        controller = connected_controller(meter)
-        controller.model = "2400"
-        controller.setup_voltage_mode(1e-3)
-        controller.apply_voltage_pulse(100, 0.0, threading.Event())
-        commands = meter.commands
-        self.assertLess(commands.index(":SOUR:VOLT:PROT 120"), commands.index(":OUTP ON"), "105 V → 120 V")
-        self.assertLess(commands.index(":SOUR:VOLT:RANG 200"), commands.index(":OUTP ON"))
-        self.assertIn(":SOUR:VOLT 100", commands)
-        self.assertEqual(meter.output, 0, "off after the pulse")
-        controller.apply_voltage_pulse(-5, 0.0, threading.Event())
-        self.assertEqual((meter.range, meter.ovp, meter.output), (21.0, 20.0, 0), "back to the 20 V range")
-        with self.assertRaisesRegex(ValueError, "±200 V"):
-            controller.apply_voltage_pulse(201, 0.0, threading.Event())
-        controller.model = "2410"
-        controller.apply_voltage_pulse(-1000, 0.0, threading.Event())
-        self.assertEqual((meter.range, meter.ovp, meter.output), (1100.0, 1100.0, 0))
-
-    def test_restore_leaves_the_output_off_in_the_pulse_setup(self):
-        self.controller.start_iv_sweep(1e-3)
-        self.controller.set_iv_voltage(5)
-        self.meter.commands.clear()
-        self.controller.restore_voltage_mode()
-        self.assertEqual(self.meter.commands[:2], [":SOUR:VOLT 0", ":OUTP OFF"])
-        self.assertIn(":SENS:CURR:PROT 0.001", self.meter.commands)
-        self.assertEqual((self.meter.output, self.meter.voltage), (0, 0.0))
-        self.assertEqual(self.controller.source_mode, "VOLT")
-        with self.assertRaisesRegex(RuntimeError, "not set up for the 2400-IV sweep"):
-            self.controller.set_iv_voltage(1)
-
 
 class Source:
     """The Gate-VI 6221: its output is switched off before the Keithley sources."""
@@ -469,14 +263,7 @@ class SixTwoTwoOneOffTests(WorkerTests):
     pass
 
 class OpenCircuitTests(unittest.TestCase):
-    def test_an_open_circuit_point_is_skipped_not_fatal(self):
-        with mock.patch.object(app.time, "sleep"):
-            meter = FakeSourceMeter(resistance_ohm=float("inf"))
-            controller = connected_controller(meter)
-            controller.start_resistance(1e-9)
-            voltage, current, resistance = controller.read_resistance()
-        self.assertEqual((voltage, current), (5.0, 0.0))
-        self.assertNotEqual(resistance, resistance, "NaN: the worker skips this point")
+    pass
 
 
 class StartQuestionTests(unittest.TestCase):

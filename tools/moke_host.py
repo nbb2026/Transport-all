@@ -21,6 +21,12 @@ INIT_DROP = (
     "self._initialize_ppms_state()",
 )
 KEEP = ("recycle_bin_available",)
+# What the program is started from.  Everything it cannot reach from these is taken out of the generated module
+# by the tool's second pass, prune_unreachable (user, 2026-11-28: "remove the unused code in RT to make it as
+# shorter as possible", then "do the same for PPMS, MOKE and FMR"): code of other pages that was kept because
+# this program's code uses the same names, and helpers only tests called (KEEP and KEEP_PATTERNS above no
+# longer hold those).
+PRUNE_ROOTS = ("main", "run")
 EXTRA_IMPORTS = (
     '_PROGRAM_FILE = str(Path(__MODULE_FILE__).resolve().parents[2] / "Transport_MOKE.py")',
     '# Installed with pip, the package is in site-packages: the folder the program is started in stands in.',

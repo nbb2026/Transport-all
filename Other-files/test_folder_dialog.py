@@ -265,7 +265,7 @@ class FolderRuleTests(Folders):
     @unittest.skipIf(sys.platform == "win32", "Windows has a Recycle Bin")
     def test_there_is_no_recycle_bin_off_windows(self):
         self.make("s", files=("s/data.csv",))
-        self.assertFalse(app.recycle_bin_available(self.tmp))
+        self.assertTrue(app.recycle_bin_refusal(self.tmp))
         self.assertIsNone(app.recycle_bin_item_count(self.tmp))
         with self.assertRaisesRegex(OSError, "no Recycle Bin"):
             app.move_folder_to_recycle_bin(self.tmp / "s")
@@ -319,7 +319,7 @@ class RecycleBinTests(Folders):
         # The checks first: a refusal here fails the test at once, and no
         # question of Windows can wait for an answer.
         self.assertEqual(app.recycle_bin_refusal(folder, 4), "")
-        self.assertTrue(app.recycle_bin_available(folder))
+        self.assertFalse(app.recycle_bin_refusal(folder))
         root = app._windows_drive_root(folder)
         self.assertRegex(root, r"^[A-Za-z]:\\$")
         switched_off, largest = app._recycle_bin_settings(root)

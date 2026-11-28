@@ -159,18 +159,6 @@ class WarmUpFromBaseTemperature(unittest.TestCase):
         a._run_ppms_command.call_args.args[1]()   # the queued PPMS operation
         return a
 
-    def test_set_t_from_5_k_lowers_the_filled_in_rate(self):
-        a = self.set_t('300', '10', 5.0)
-        a.ppms_environment_controller.set_temperature.assert_called_once_with(300.0, 1.0, 0)
-        self.assertEqual(a.ppms_temperature_rate_var.get(), '1')
-
-    def test_set_t_above_9_k_or_a_slower_rate_is_kept(self):
-        for rate, readback, sent in (('10', 20.0, 10.0), ('10', None, 10.0), ('0.5', 5.0, 0.5)):
-            with self.subTest(rate=rate, readback=readback):
-                a = self.set_t('300', rate, readback)
-                a.ppms_environment_controller.set_temperature.assert_called_once_with(300.0, sent, 0)
-                self.assertEqual(a.ppms_temperature_rate_var.get(), rate)
-
     def macro_panel(self, live_k):
         panel = app.CombinedControlApp.__new__(app.CombinedControlApp)
         panel.ppms_macro_stop = threading.Event()
@@ -179,55 +167,6 @@ class WarmUpFromBaseTemperature(unittest.TestCase):
         panel.ppms_environment_controller.read_environment.return_value = {'temperature_k': live_k}
         panel.thread_log = Mock()
         return panel
-
-    def test_macro_temp_without_rate_picks_it_from_the_live_temperature(self):
-        commands = app.parse_ppms_macro('TEMP 5\nWAI WAITFOR 60 1 0 0 0 0\nSCAN\nTEMP 300')
-        self.assertEqual(commands[-1], (4, 'TEMP', (300.0, None, 0)))
-        for target, live, rate in ((300., 5., 1.), (300., 9., 1.), (300., 20., 10.),
-                                   (5., 300., 1.), (300., float('nan'), 1.)):
-            with self.subTest(target=target, live=live):
-                panel = self.macro_panel(live)
-                panel._ppms_macro_operation('TEMP', (target, None, 0))
-                panel.ppms_environment_controller.set_temperature.assert_called_once_with(target, rate, 0)
-                # The run log names the rate the line used.
-                self.assertIn(f'without a rate: {rate:g} K/min', panel.thread_log.call_args.args[0])
-
-    def test_macro_explicit_rates(self):
-        # An explicit rate is kept; after a TEMP at or below 9 K with no SCAN
-        # in between, a fast warm-up is refused at Validate, before anything
-        # is sent.
-        self.assertEqual(app.parse_ppms_macro('TMP TEMP 10 10 0')[0], (1, 'TEMP', (10, 10, 0)))
-        for text in ('TEMP 5\nWAI WAITFOR 60 1 0 0 0 0\nTEMP 300 10',
-                     'TEMP 5\nFIELD 0 100\nWAIT 10\nTEMP 300 10'):
-            with self.subTest(text=text), self.assertRaisesRegex(ValueError, r'Line \d: .*1 K/min'):
-                app.parse_ppms_macro(text)
-        self.assertEqual(app.parse_ppms_macro('TEMP 5\nWAI WAITFOR 60 1 0 0 0 0\nTEMP 300 1')[-1],
-                         (3, 'TEMP', (300., 1., 0)))
-        # A SCAN in between may be a Temperature scan that warmed the sample
-        # (e.g. 5 -> 300 K), so Validate no longer assumes 5 K: the line
-        # parses (as at c3271af) and the run checks the live temperature.
-        commands = app.parse_ppms_macro('TMP TEMP 5 1 0\nWAI WAITFOR 60 1 0 0 0 0\nSCAN\nTMP TEMP 250 10 0')
-        self.assertEqual(commands[-1], (4, 'TEMP', (250., 10., 0)))
-        # WAITFOR still waits for the last TEMP target.
-        self.assertEqual(app.parse_ppms_macro('TEMP 5\nSCAN\nWAI WAITFOR 60 1 0 0 0 0')[-1],
-                         (3, 'WAITFOR', (60., 5., None, None)))
-        panel = self.macro_panel(300.)
-        panel._ppms_macro_operation('TEMP', commands[-1][2])
-        panel.ppms_environment_controller.set_temperature.assert_called_once_with(250., 10., 0)
-        # The same line after a SCAN that left the sample at base temperature
-        # is refused at run time, with nothing sent.
-        panel = self.macro_panel(5.)
-        with self.assertRaisesRegex(ValueError, '1 K/min'):
-            panel._ppms_macro_operation('TEMP', commands[-1][2])
-        panel.ppms_environment_controller.set_temperature.assert_not_called()
-        # Starting at base temperature with no TEMP before it: still refused
-        # at run time, with nothing sent (fails safe, as before).
-        panel = self.macro_panel(5.)
-        with self.assertRaisesRegex(ValueError, '1 K/min'):
-            panel._ppms_macro_operation('TEMP', app.parse_ppms_macro('TEMP 300 10')[0][2])
-        panel.ppms_environment_controller.set_temperature.assert_not_called()
-        panel.thread_log.assert_not_called()
-
 
 class RTESR830AddressesCanBeTyped(unittest.TestCase):
     """minor #20: RT-E builds its SR830 addresses as plain entries."""
@@ -302,64 +241,6 @@ class MacroTempKeepsItsRate(unittest.TestCase):
             (panel.ppms_temperature_target_var.get(), panel.ppms_temperature_rate_var.get())))
         panel._ppms_macro_next()
         return panel, seen
-
-    def test_temp_with_a_rate_then_scan(self):
-        # The box held 3 K/min; the target trace made it 10, so the SCAN
-        # re-sent 250 K at 10 K/min, overriding the Macro's 3.
-        panel, seen = self.run_macro('TEMP 250 3\nSCAN')
-        panel.ppms_environment_controller.set_temperature.assert_called_once_with(250., 3., 0)
-        self.assertEqual(seen, [('250.0', '3')])
-        statuses = [c.args[0] for c in panel.ppms_macro_status.set.call_args_list]
-        self.assertEqual(statuses[0], 'Running line 1: TEMP 250.0 3.0 0')
-        # Set T afterwards sends the same rate.
-        panel.ppms_last_readback = {'temperature_k': 250.}
-        panel.ppms_temperature_approach_var = Var('Fast settle')
-        panel._run_ppms_command = Mock()
-        panel.root = None
-        with patch.object(app.messagebox, 'showerror') as showerror:
-            panel.set_ppms_temperature()
-        showerror.assert_not_called()
-        panel._run_ppms_command.call_args.args[1]()
-        panel.ppms_environment_controller.set_temperature.assert_called_with(250., 3., 0)
-
-    def test_other_explicit_rates_reach_the_box(self):
-        for text, live, box in (('TEMP 5 0.5', 6., '0.5'), ('TMP TEMP 20 7 1', 300., '7'),
-                                ('TEMP 300 1\nSCAN', 5., '1')):
-            with self.subTest(text=text):
-                panel, _ = self.run_macro(text, box_rate='3', live_k=live)
-                self.assertEqual(panel.ppms_temperature_rate_var.get(), box)
-
-    def test_temp_without_a_rate_shows_auto(self):
-        # The run picks 10 (live and target above 9 K); the box shows the
-        # target trace's value, as for a typed target, and the status line
-        # says "auto" instead of "None".
-        panel, seen = self.run_macro('TEMP 300\nSCAN', box_rate='3', live_k=300.)
-        panel.ppms_environment_controller.set_temperature.assert_called_once_with(300., 10., 0)
-        statuses = [c.args[0] for c in panel.ppms_macro_status.set.call_args_list]
-        self.assertEqual(statuses[0], 'Running line 1: TEMP 300.0 auto 0')
-        self.assertEqual(seen, [('300.0', '10')])
-        self.assertNotIn('None', ' '.join(statuses))
-
-    def test_a_waitfor_with_a_wait_switched_off_shows_a_dash(self):
-        # Review, 2026-10-13: "auto" read as if the field were waited for
-        # automatically; that wait is skipped.
-        commands = app.parse_ppms_macro('TEMP 300 1\nFIELD 100 50\nWAITFOR 10 1 0 0 0 0')
-        panel = app.CombinedControlApp.__new__(app.CombinedControlApp)
-        panel.closing = False
-        panel.ppms_macro_stop = threading.Event()
-        panel.ppms_macro_commands = iter(commands[2:])
-        panel.ppms_macro_status = Mock()
-        panel.ppms_macro_editor = Mock()
-        panel.thread_log = Mock()
-        panel._set_ppms_environment_ui = Mock()
-        panel.ppms_executor = Mock()        # the wait itself is not run here
-        panel._ppms_macro_next()
-        status = panel.ppms_macro_status.set.call_args.args[0]
-        self.assertTrue(status.startswith('Running line 3: WAITFOR 10.0 300.0 '), status)
-        self.assertNotIn('auto', status)
-        self.assertIn(' -', status)
-        panel.ppms_executor.submit.assert_called_once_with(panel._ppms_macro_operation, 'WAITFOR', commands[2][2])
-
 
 class RTEStartIgnoresUnusedKepcoBoxes(unittest.TestCase):
     """minor #23: the real RTEPanel.start_ppms_field_scan up to its submit."""

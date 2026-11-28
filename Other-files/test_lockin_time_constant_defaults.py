@@ -46,18 +46,6 @@ class DefaultsAreOneSecond(NoWindows):
         self.assertEqual(inspect.signature(app.NonLocalACController.configure_mfli)
                          .parameters["timeconstant_s"].default, 1.0)
 
-    def test_the_ppms_and_rte_zurich_box_shows_1(self):
-        """RTEPanel builds its Zurich row through PPMSPanel.__init__, so this
-        is the RT-E "TC (s)" box too."""
-        _parent, panel, controller = two_panels.TwoPanelTests.make_panel(None)
-        self.assertEqual(panel.zurich_timeconstant.get(), "1")
-        panel.zurich_harmonic.set("1+2+3")
-        panel.connect_ppms2_zurich()
-        self.assertEqual(controller.configure_mfli.call_args.kwargs["timeconstant_s"], 1.0)
-        controller.configure_second_harmonic.assert_called_once_with(1.0)
-        controller.configure_third_harmonic.assert_called_once_with(1.0)
-
-
 class OneTimeConstantSettle(NoWindows):
     pass
 
@@ -65,25 +53,7 @@ class OneTimeConstantSettle(NoWindows):
 class WaitsAtTheNewDefaults(NoWindows):
     """The rules are unchanged; these are their values at the 1 s defaults."""
 
-    def test_ppms_zurich_range_wait_falls_back_to_1_s(self):
-        """After a Zurich range change the PPMS / RT-E reading waits
-        max(0.2 s, 10 x TC); with no configured TC, 10 x the 1 s default."""
-        _parent, panel, controller = two_panels.TwoPanelTests.make_panel(None)
-        controller.mfli_config = {}
-        controller.read_stfmr_mfli.side_effect = [
-            {"auto_range": "RANGE 0.01->0.1 V", "X": 999},
-            {"auto_range": "", "X": 1e-6, "input_range_v": 0.1}]
-        clock = [0.0]
-
-        def sleep(seconds):
-            clock[0] += seconds
-
-        module = two_panels.app
-        with mock.patch.object(module.time, "monotonic", lambda: clock[0]), \
-                mock.patch.object(module.time, "sleep", sleep):
-            result = panel._read_ppms2_zurich_ranged(317.3, scanning=True)
-        self.assertEqual(result["X"], 1e-6)
-        self.assertAlmostEqual(clock[0], 10.0, places=6)
+    pass
 
 
 def _step_seen(t_s, tau_s):
@@ -107,59 +77,7 @@ class DefaultSetupsAtTheNewTc(NoWindows):
     out-of-the-box setups read before a 1 s TC has settled (reviewed,
     user, 2026-10-14).  Only documented here; the waits are unchanged."""
 
-    def test_a_ranging_idle_ppms_read_holds_the_zurich_10_s_per_step(self):
-        """The idle readout (after Set 6221 with a current) ranges under the
-        Zurich lock, so Zurich actions and a scan Start's Zurich set-up wait
-        for it: up to 4 x 10 s at the 1 s default, 4 x 1 s at 0.1 s."""
-        for tc_s, held_s in ((app.PPMS_ZURICH_TIME_CONSTANT_S, 40.0), (0.1, 4.0)):
-            with self.subTest(tc_s=tc_s):
-                _parent, panel, controller = two_panels.TwoPanelTests.make_panel(None)
-                panel.connect_ppms2_zurich()
-                self.assertTrue(controller.mfli_connected)
-                clock = [0.0]
-
-                class TimedLock:
-                    """The Zurich RLock, timing each outermost hold."""
-                    def __init__(self):
-                        self.inner = threading.RLock()
-                        self.depth = 0
-                        self.held = []
-
-                    def __enter__(self):
-                        self.inner.acquire()
-                        if self.depth == 0:
-                            self.since = clock[0]
-                        self.depth += 1
-                        return self
-
-                    def __exit__(self, *exc):
-                        self.depth -= 1
-                        if self.depth == 0:
-                            self.held.append(clock[0] - self.since)
-                        self.inner.release()
-                        return False
-
-                controller.lock = TimedLock()
-                controller.mfli_config = {"timeconstant_s": tc_s}
-                controller.read_stfmr_mfli.side_effect = lambda frequency, **kwargs: {
-                    "auto_range": "RANGE 0.01->0.1 V", "X": 999}
-                panel.ppms_idle_autorange_enabled = True
-                panel.ppms_6221_zero_output = False
-                panel.ppms_field_scan_running = False
-
-                def sleep(seconds):
-                    clock[0] += seconds
-
-                module = two_panels.app
-                with mock.patch.object(module.time, "monotonic", lambda: clock[0]), \
-                        mock.patch.object(module.time, "sleep", sleep):
-                    panel._poll_ppms2_zurich()
-                self.assertEqual(controller.read_stfmr_mfli.call_count, 4)
-                self.assertTrue(all(call.kwargs["auto_range"]
-                                    for call in controller.read_stfmr_mfli.call_args_list))
-                self.assertEqual(len(controller.lock.held), 1)
-                self.assertAlmostEqual(controller.lock.held[0], held_s, places=6)
-                self.assertIn("did not settle", panel.zurich_status.get())
+    pass
 
 
 if __name__ == "__main__":

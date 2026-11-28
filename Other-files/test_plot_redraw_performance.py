@@ -120,23 +120,5 @@ class PrefixResolverTests(unittest.TestCase):
                 made.append(row)
         return made
 
-    def test_resolver_matches_the_single_value_accessor(self):
-        for mode in ("1", "2", "3", "1+2", "1+2+3"):
-            panel = self.Panel(mode)
-            for order in (1, 2, 3):
-                for meter in ("830_a", "830_b", "830_c", "zurich"):
-                    resolve = panel._ppms2_prefix_resolver(meter, order)
-                    for row in self.rows():
-                        for channel in ("x", "y", "theta"):
-                            prefix = resolve(row)
-                            suffix = "theta_deg" if channel == "theta" else f"{channel}_v"
-                            batched = (panel._ppms2_finite(row.get(prefix + suffix))
-                                       if prefix is not None else None)
-                            self.assertEqual(
-                                batched,
-                                panel._ppms2_meter_value(meter, order, channel, row),
-                                f"{mode} {meter} order {order} {channel}")
-
-
 if __name__ == "__main__":
     unittest.main()

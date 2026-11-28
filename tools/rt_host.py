@@ -44,6 +44,11 @@ INIT_DROP = (
 )
 # Names kept whatever the reachability says (helpers only tests call).
 KEEP = ("recycle_bin_available",)
+# What the program is started from.  Everything it cannot reach from these is taken out of the generated module
+# (user, 2026-11-28: "remove the unused code in RT to make it as shorter as possible"): the PPMS page's own
+# window, scans, macro and cryostat commands, which this page replaces, the parts of the instrument classes only
+# other pages use, and the helpers only tests called (KEEP and KEEP_PATTERNS above no longer hold those).
+PRUNE_ROOTS = ("main", "run")
 # Names the transport package already has: imported, not copied.
 PACKAGE_IMPORTS = {}
 # Lines after the imports.  _PROGRAM_FILE stands for the main program's

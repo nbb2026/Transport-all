@@ -43,6 +43,14 @@ application's own version, in place of the main program's), SOURCE_REPLACE
 for what only this application has; each old text must occur once).  Its other top-level
 definitions replace, or add to, the main program's; the methods of its
 ``class CombinedControlApp`` replace that class's.
+
+PRUNE_ROOTS (names the program is started from: ``("main", "run")``) turns on
+a second pass over the generated module, ``prune_unreachable``, which takes
+out what the program cannot reach from those names.  It is stricter than the
+name matching above because it follows which object a method is called on;
+see its docstring.  With it, KEEP and KEEP_PATTERNS no longer keep anything
+the program itself does not use (helpers only tests called go, with their
+tests).
 """
 from __future__ import annotations
 
@@ -54,7 +62,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 APP_CLASS = "CombinedControlApp"
 SETTINGS = ("DROP", "STUBS", "INIT_DROP", "PACKAGE_IMPORTS", "KEEP", "EXTRA_IMPORTS", "PAGE_CLASS", "OUTPUT",
-            "GLUE_FILES", "KEEP_PATTERNS", "APP_NAME", "REPLACE", "APP_VERSION", "SOURCE_REPLACE")
+            "GLUE_FILES", "KEEP_PATTERNS", "APP_NAME", "REPLACE", "APP_VERSION", "SOURCE_REPLACE", "PRUNE_ROOTS")
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -170,7 +178,8 @@ def self_targets(statement):
 
 
 def main(argv) -> int:
-    if len(argv) != 3:
+    argv = [item for item in argv if item != "--list-pruned"] + (["--list-pruned"] if "--list-pruned" in argv else [])
+    if len([item for item in argv if item != "--list-pruned"]) != 3:
         print(__doc__)
         return 2
     host_path, source_path = Path(argv[1]).resolve(), Path(argv[2])
@@ -350,6 +359,12 @@ def main(argv) -> int:
         if count != 1:
             raise SystemExit(f"APP_VERSION: {count} assignments in the generated module")
     ast.parse(result)
+    pruned = None
+    if settings.get("PRUNE_ROOTS"):
+        before = result.count("\n")
+        result, pruned = prune_unreachable(result, tuple(settings["PRUNE_ROOTS"]))
+        ast.parse(result)
+        pruned.insert(0, f"unreachable code taken out: {before - result.count(chr(10))} lines, {len(pruned)} definitions")
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(result, encoding="utf-8")
     print(f"{output.relative_to(HERE.parent)}: {result.count(chr(10))} lines (from {len(lines)})")
@@ -358,7 +373,267 @@ def main(argv) -> int:
     print(f"{APP_CLASS} methods kept: {len(kept_methods)} of {len(app_methods)}; __init__ statements {len(kept_init)} of {len(init.body)}")
     dropped_but_named = sorted(name for name in referenced & drop)
     print(f"named in kept code but dropped ({len(dropped_but_named)}): {', '.join(dropped_but_named)}")
+    if pruned:
+        print(pruned[0])
+        listing = output.with_name(output.stem + "_pruned.txt") if "--list-pruned" in argv else None
+        if listing:
+            listing.write_text("\n".join(pruned) + "\n", encoding="utf-8")
     return 0
+
+
+# Methods Python or the standard library calls by name on an object it is handed (a stream given to print,
+# a lock): kept in every class that is used, named in the program or not.
+PROTOCOL_NAMES = ("write", "flush", "close", "read", "readline", "fileno", "isatty")
+CLASS_HOOKS = ("__init_subclass__", "__class_getitem__", "__set_name__")
+FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
+
+
+def call_fits(shape, node) -> bool:
+    """Whether a call with these arguments can be a call of this method (Python would raise TypeError otherwise).
+    ``shape`` is (number of positional arguments, keyword names), or None when the arguments are not known."""
+    if shape is None:
+        return True
+    decorators = [item.id if isinstance(item, ast.Name) else None for item in node.decorator_list]
+    if any(item not in ("staticmethod", "classmethod") for item in decorators):
+        return True                      # a property, or something else: not called through its own signature
+    count, keywords = shape
+    args = node.args
+    positional = [*args.posonlyargs, *args.args][0 if "staticmethod" in decorators else 1:]
+    if count > len(positional) and args.vararg is None:
+        return False
+    by_keyword = {arg.arg for arg in (*args.args, *args.kwonlyargs)}
+    if args.kwarg is None and not keywords <= by_keyword:
+        return False
+    needed = positional[count:len(positional) - len(args.defaults)] if len(args.defaults) else positional[count:]
+    if any(arg.arg not in keywords for arg in needed):
+        return False
+    return all(arg.arg in keywords for arg, default in zip(args.kwonlyargs, args.kw_defaults) if default is None)
+
+
+def prune_unreachable(text: str, roots, details=None) -> tuple[str, list[str]]:
+    """The module without the definitions the program cannot reach from ``roots``.
+
+    Reachability, on the syntax tree:
+
+    * A top-level function, class or constant is reached when its name is used in reached code, as a name or
+      as a string that is an identifier.  Top-level statements that are not plain definitions (``try``, ``if``,
+      calls, assignments whose value calls something) are reached from the start.
+    * A class is *made* when its name is used in reached code other than as a base class, in ``isinstance`` or
+      before a dot (``Class.attribute``).  Only made classes have objects.
+    * A method is reached per class of the object it runs on.  In a method reached for an object of class T:
+      ``self.name`` and ``super().name`` are looked up as Python does, along T's bases, and reach that one
+      method for T.  This is what the name matching cannot do: a method of the main window that the page
+      replaces is not kept for the page's ``self.name``.
+    * ``anything_else.name``, and every string that is an identifier (``getattr``, ``__dict__`` look-ups), may
+      be any object: it reaches, for every made class, the method that name finds there.  Where it is called
+      on the spot with plain arguments (``widget.configure(text=...)``), only a method that can take those
+      arguments (``call_fits``): Tk's ``configure`` and ``set`` do not keep an instrument's.
+    * ``Class.name`` reaches that method for every made class that has it, and for Class.
+    * For a made class: its special methods (``__init__``, ``__getattr__`` ...), PROTOCOL_NAMES, and, when a
+      base is not a class of this module (an exception, a ctypes structure, a widget), all its methods, since
+      code outside the module may call them.
+
+    What it cannot see is a method name built at run time (``getattr(x, "a" + b)``); the module has none
+    (every ``getattr`` with a name that is not a literal passes the name on, or takes it from a tuple of
+    literals), and Other-files/test_unreachable_pruning.py checks that this stays so.
+
+    Returns the new text and one line per definition taken out.
+    """
+    tree = ast.parse(text)
+    lines = text.split("\n")
+    classes = {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
+
+    def mro(name):
+        order = [name]
+        for base in classes[name].bases:
+            if isinstance(base, ast.Name) and base.id in classes:
+                order += [item for item in mro(base.id) if item not in order]
+        return order
+    lineage = {name: mro(name) for name in classes}
+    outside = {name: any(not (isinstance(base, ast.Name) and (base.id in classes or base.id == "object"))
+                         for item in lineage[name] for base in classes[item].bases) for name in classes}
+    methods: dict[tuple[str, str], list] = {}
+    for node in classes.values():
+        for item in node.body:
+            if isinstance(item, FUNCTIONS):
+                methods.setdefault((node.name, item.name), []).append(item)
+
+    def resolve(made, name, after=None):
+        order = lineage[made]
+        for owner in order[order.index(after) + 1:] if after is not None else order:
+            if (owner, name) in methods:
+                return owner
+        return None
+
+    top: dict[str, list] = {}
+    start = []
+    for node in tree.body:
+        if isinstance(node, (ast.ClassDef, *FUNCTIONS)) and not node.decorator_list:
+            top.setdefault(node.name, []).append(node)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)) and not any(isinstance(item, (ast.Call, ast.Await, ast.NamedExpr)) for item in ast.walk(node)):
+            for name in bound_names(node):
+                top.setdefault(name, []).append(node)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            continue
+        else:
+            start.append(node)
+
+    def scan(node, self_name=None):
+        """What a piece of code refers to: (names, class names used so that the class is made, attributes of
+        any object, attributes of self, attributes of super(), (Class, attribute) pairs, self used bare)."""
+        if self_name and any(isinstance(item, ast.Name) and item.id == self_name and not isinstance(item.ctx, ast.Load) for item in ast.walk(node)):
+            self_name = None
+        names, made, anything, own, inherited, explicit, bare = set(), set(), set(), set(), set(), set(), []
+        not_made, shapes = set(), {}
+
+        def visit(item, me):
+            if item is not node and isinstance(item, (*FUNCTIONS, ast.Lambda)):
+                args = item.args
+                if me in {arg.arg for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs, *filter(None, (args.vararg, args.kwarg)))}:
+                    me = None
+            elif item is not node and isinstance(item, ast.ClassDef):
+                me = None
+            if isinstance(item, ast.Attribute):
+                value = item.value
+                if isinstance(value, ast.Name) and me and value.id == me:
+                    own.add(item.attr)
+                    not_made.add(id(value))
+                elif isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "super" and not value.args and me:
+                    inherited.add(item.attr)
+                elif isinstance(value, ast.Name) and value.id in classes:
+                    explicit.add((value.id, item.attr))
+                    not_made.add(id(value))
+                else:
+                    anything.add((item.attr, shapes.get(id(item))))
+            elif isinstance(item, ast.Name):
+                names.add(item.id)
+                if id(item) not in not_made:
+                    if item.id in classes:
+                        made.add(item.id)
+                    if me and item.id == me:
+                        bare.append(item)
+            elif isinstance(item, ast.Constant) and isinstance(item.value, str) and IDENTIFIER.match(item.value):
+                names.add(item.value)
+                anything.add((item.value, None))
+                if item.value in classes:
+                    made.add(item.value)
+            elif isinstance(item, ast.Global):
+                names.update(item.names)
+            elif isinstance(item, ast.Call) and isinstance(item.func, ast.Name) and item.func.id in ("isinstance", "issubclass") and len(item.args) == 2:
+                not_made.update(id(sub) for sub in ast.walk(item.args[1]) if isinstance(sub, ast.Name))
+            elif isinstance(item, ast.Call) and isinstance(item.func, ast.Attribute) and not any(isinstance(arg, ast.Starred) for arg in item.args) and all(word.arg for word in item.keywords):
+                shapes[id(item.func)] = (len(item.args), frozenset(word.arg for word in item.keywords))
+            for child in ast.iter_child_nodes(item):
+                visit(child, me)
+        visit(node, self_name)
+        return names, made, anything, own, inherited, explicit, bool(bare)
+
+    names, made, anything = set(roots), set(), {(name, None) for name in PROTOCOL_NAMES}
+    kept_top, kept_classes, reached, waiting, pending = set(), set(), set(), [], set()
+    scans = {}
+
+    def reach(for_class, owner, name):
+        if owner is not None and (for_class, owner, name) not in reached:
+            reached.add((for_class, owner, name))
+            waiting.append((for_class, owner, name))
+
+    def absorb(found, for_class=None, owner=None, class_method=False):
+        found_names, found_made, found_anything, own, inherited, explicit, bare = found
+        names.update(found_names)
+        made.update(found_made)
+        anything.update(found_anything)
+        if for_class is None:
+            anything.update((name, None) for name in own | inherited)
+        else:
+            for name in own:
+                reach(for_class, resolve(for_class, name), name)
+            for name in inherited:
+                reach(for_class, resolve(for_class, name, after=owner), name)
+            if class_method and bare:      # cls(...) or cls handed on: objects of that class may exist
+                made.add(for_class)
+        for class_name, name in explicit:
+            names.add(class_name)
+            pending.add((class_name, name))
+
+    def kind(node):
+        return {item.id for item in node.decorator_list if isinstance(item, ast.Name)} & {"staticmethod", "classmethod"}
+
+    for node in start:
+        absorb(scan(node))
+    changed = True
+    while changed or waiting:
+        changed = False
+        while waiting:
+            for_class, owner, name = waiting.pop()
+            for node in methods[(owner, name)]:
+                if id(node) not in scans:
+                    first = [*node.args.posonlyargs, *node.args.args][:1]
+                    scans[id(node)] = scan(node, first[0].arg if first and "staticmethod" not in kind(node) else None)
+                absorb(scans[id(node)], for_class, owner, "classmethod" in kind(node))
+            changed = True
+        for name in list(names):
+            for node in top.get(name, ()):
+                if id(node) in kept_top:
+                    continue
+                kept_top.add(id(node))
+                changed = True
+                if not isinstance(node, ast.ClassDef):
+                    absorb(scan(node))
+                    continue
+                kept_classes.add(node.name)
+                for hook in CLASS_HOOKS:
+                    reach(node.name, resolve(node.name, hook), hook)
+                for item in (*node.bases, *node.keywords):
+                    names.update(sub.id for sub in ast.walk(item) if isinstance(sub, ast.Name))
+                for item in node.body:
+                    if not isinstance(item, FUNCTIONS):
+                        found = scan(item)
+                        absorb(found)
+                        anything.update((sub, None) for sub in found[0] if (node.name, sub) in methods)
+        called: dict[str, set] = {}
+        for name, shape in anything:
+            called.setdefault(name, set()).add(shape)
+        for class_name in list(made):
+            names.update(lineage[class_name])
+            for owner, name in list(methods):
+                if owner not in lineage[class_name]:
+                    continue
+                found = resolve(class_name, name)
+                if (name.startswith("__") and name.endswith("__")) or outside[class_name] or any(
+                        call_fits(shape, node) for shape in called.get(name, ()) for node in methods[(found, name)]):
+                    reach(class_name, found, name)
+        for class_name, name in list(pending):
+            owner = resolve(class_name, name)
+            for for_class in [class_name, *(item for item in made if owner in lineage[item])] if owner else ():
+                reach(for_class, owner, name)
+
+    kept_methods = {(owner, name) for _for_class, owner, name in reached}
+    if details is not None:
+        details.update(reached=reached, made=made, lineage=lineage, kept_top=kept_top, names=names)
+    cuts, report = [], []     # (first line, last line, replacement lines)
+
+    def cut(node, label, replacement=()):
+        first = first_line(node)
+        cuts.append((first, node.end_lineno, list(replacement)))
+        if label:
+            report.append(f"{node.end_lineno - first + 1:5d}  {label}")
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            if isinstance(node, ast.ImportFrom) and node.module == "__future__":
+                continue
+            wanted = [alias for alias in node.names if (alias.asname or alias.name).split(".")[0] in names]
+            if len(wanted) < len(node.names):
+                node.names = wanted
+                cut(node, "", [ast.unparse(node)] if wanted else [])
+        elif id(node) in kept_top and isinstance(node, ast.ClassDef):
+            gone = [item for item in node.body if isinstance(item, FUNCTIONS) and (node.name, item.name) not in kept_methods]
+            for index, item in enumerate(gone):
+                cut(item, f"{node.name}.{item.name}", ["    pass"] if len(gone) == len(node.body) and index == 0 else [])
+        elif id(node) not in kept_top and any(node in nodes for nodes in top.values()):
+            cut(node, f"class {node.name}" if isinstance(node, ast.ClassDef) else node.name if isinstance(node, FUNCTIONS) else ", ".join(sorted(bound_names(node))))
+    for first, last, replacement in sorted(cuts, reverse=True):
+        lines[first - 1:last] = replacement
+    return "\n".join(lines), sorted(report, reverse=True)
 
 
 def body_dedent(code: str) -> str:

@@ -102,13 +102,6 @@ class PaletteTests(unittest.TestCase):
         self.assertEqual(app.THEME_COLORS["plot_series"], app.THEME_COLORS["accent"])
         self.assertEqual(app.THEME_COLORS["plot_background"], "#ffffff")
 
-    def test_one_set_of_red_button_colours(self):
-        self.assertIs(app.RTE_RED_BUTTON_COLORS, app.RED_BUTTON_COLORS)
-        normal = app.RED_BUTTON_COLORS["normal"]
-        self.assertEqual((normal["bg"], normal["fg"], normal["activebackground"], normal["activeforeground"]),
-                         ("#c62828", "white", "#8e0000", "white"))
-        self.assertNotEqual(app.RED_BUTTON_COLORS["disabled"]["bg"], "#c62828", "a locked button looks locked")
-
     def test_no_red_or_plot_colour_outside_the_palette(self):
         source = PROGRAM.read_text(encoding="utf-8")
         for old in ("#d70018", "#a80012", "#b8c0c8", "#a51c19"):

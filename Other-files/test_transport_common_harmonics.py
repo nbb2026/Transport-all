@@ -101,7 +101,6 @@ class TestTransportCommonHarmonics(unittest.TestCase):
             {"830_a": "harmonic_a", "830_b": "harmonic_b", "830_c": "harmonic_c"},
         )
         self.assertEqual(app.PPMS_HARMONIC_ORDERS, (1, 2, 3))
-        self.assertEqual(app.PPMS_HARMONIC_CHOICES, (1, 2, 3, "1+2", "1+2+3"))
         self.assertEqual(app.PPMS_HARMONIC_LABELS[1], "1st harmonic")
         self.assertEqual(app.PPMS_SR830_HARMONIC_SETTING_KEYS["830_a"], "harmonic_a")
 

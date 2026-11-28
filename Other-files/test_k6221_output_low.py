@@ -44,34 +44,6 @@ class ControllerTests(unittest.TestCase):
         made._query_error = lambda *_: None
         return made
 
-    def test_grounded_output_low_is_set_to_floating(self):
-        fake = FakeK6221(low_to_earth=1)
-        self.controller(fake)._set_output_low_floating()
-        self.assertIn(app.K6221_OUTPUT_LOW_FLOATING, fake.writes)
-        self.assertEqual(fake.low_to_earth, 0)
-
-    def test_already_floating_is_left_alone(self):
-        fake = FakeK6221(low_to_earth=0)
-        self.controller(fake)._set_output_low_floating()
-        self.assertEqual(fake.writes, [], "no write when it already floats")
-
-    def test_instrument_that_refuses_raises_with_the_panel_path(self):
-        fake = FakeK6221(low_to_earth=1, stuck=True)
-        with self.assertRaises(RuntimeError) as caught:
-            self.controller(fake)._set_output_low_floating()
-        self.assertIn("OUTPUT LOW", str(caught.exception))
-
-    def test_on_off_replies_are_understood(self):
-        for reply, expected in (("OFF\n", 0), ("ON\n", 1), ("0", 0), ("1", 1)):
-            self.assertEqual(
-                self.controller(FakeK6221(reply=reply))._read_output_low_to_earth(),
-                expected, reply)
-
-    def test_unknown_reply_is_reported(self):
-        with self.assertRaises(RuntimeError):
-            self.controller(FakeK6221(reply="MAYBE\n"))._read_output_low_to_earth()
-
-
 class RackTests(unittest.TestCase):
     """The PPMS and RT-E rack, which does not reset the instrument."""
 

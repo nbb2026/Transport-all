@@ -45,22 +45,7 @@ class MokeTests(unittest.TestCase):
     pass
 
 class StfmrTests(unittest.TestCase):
-    def test_the_overload_latched_by_a_range_change_is_dropped(self):
-        controller = app.STFMRSR830Controller.__new__(app.STFMRSR830Controller)
-        controller.lock = threading.RLock()
-        controller.auto_range_enabled = True
-        controller.sensitivity_index = 17
-        controller.low_range_count = controller.range_cooldown = 0
-        snap = "0.9e-3,0,0.95e-3,0,17.3"   # near full scale of SENS 17 (1 mV)
-        controller.instrument = Recorder({
-            "SNAP? 1,2,3,4,9": [snap, "1e-4,0,1e-4,0,17.3"],
-            "LIAS?": ["0", "4", "0"],   # 4: latched by the range change
-            "SENS?": "18",
-        })
-        controller.read_sample(17.3)                      # steps up to 18
-        sample = controller.read_sample(17.3)
-        self.assertEqual(controller.sensitivity_index, 18, "no further step")
-        self.assertEqual(sample["status"], 0, "the latched bit was read and dropped")
+    pass
 
 class PpmsTests(unittest.TestCase):
     def test_rte_zero_off_acts_on_an_output_switched_on_elsewhere(self):
@@ -84,25 +69,6 @@ class PpmsTests(unittest.TestCase):
         kepco.force_output_off.assert_called_once()
         kepco.zero_output.assert_not_called()
         self.assertEqual(panel.rte_drive_live.get(), "KEPCO: zeroed and output OFF")
-
-    def test_a_typed_temperature_rate_is_kept(self):
-        a = bare_app()
-        a.ppms_temperature_target_var, a.ppms_temperature_rate_var = Var("300"), Var("2")
-        # Set T reads the rate as typed above 10 K, and lowers it below.
-        with mock.patch.object(app.CombinedControlApp, "set_ppms_temperature",
-                               app.CombinedControlApp.set_ppms_temperature):
-            try:
-                a.set_ppms_temperature()
-            except Exception:
-                pass   # nothing connected here; only the rate matters
-        self.assertEqual(a.ppms_temperature_rate_var.get(), "2")
-        a.ppms_temperature_target_var.set("5")
-        try:
-            a.set_ppms_temperature()
-        except Exception:
-            pass
-        self.assertEqual(a.ppms_temperature_rate_var.get(), "1")
-
 
 if __name__ == "__main__":
     unittest.main()

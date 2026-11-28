@@ -143,7 +143,7 @@ per instrument address; it goes when the holder disconnects, closes or dies).
 | [`transport/rt/app.py`](transport/rt/app.py) | The application: the SHHV & Switch panel, the instrument controllers and the window. Generated (see below). |
 | [`transport/core`](transport/core) | Scan sequences, the run recorder (run folder, live CSV, JSON-lines log), and the end-of-scan zeroing and close hand-off. |
 | [`transport/common`](transport/common) | Harmonic planning, lock-in settling, and the check of the 6221 / SR830 scan settings. |
-| [`transport/ppms`](transport/ppms) | PPMS limits and command checks, and the MultiPyVu controller (shared package modules; used where the application's code reaches them). |
+| [`transport/ppms`](transport/ppms) | PPMS limits and command checks (a shared package module; the application uses its field-command check). The MultiPyVu controller is not here: this program reaches no PPMS. |
 
 The modules in `transport/core`, `transport/common` and `transport/ppms` are
 Jiaze Li's, separated from the program in November 2026. The application
@@ -159,8 +159,25 @@ python tools/extract_app.py tools/rt_host.py /path/to/main/Transport_all.py
 ```
 
 Starting from the SHHV & Switch panel, it keeps every function, class, constant and
-method they reach, and nothing of the other pages: about 16,700 of the
-main program's 40,500 lines. Two small files steer it:
+method they reach, and nothing of the other pages: about 11,900 of the
+main program's 40,600 lines. It works in two passes:
+
+1. By name: whatever the panel, the window and what they use *name* is kept.
+   This alone left about 16,900 lines, because the panel is built on the PPMS
+   page and shares names with it.
+2. By reach (`prune_unreachable`, turned on by `PRUNE_ROOTS` in the steering
+   file): from `main`, it follows which object each method is called on, as
+   Python looks a method up, and takes out what the program cannot get to:
+   the PPMS page's own window, scans, macro, cryostat and rotator code that
+   this page replaces, the parts of the instrument classes only other pages
+   use, and helpers only tests called. Their tests went with them. A method
+   name used on an unknown object, or in a string, still keeps that method in
+   every class that is used, so it errs on the side of keeping.
+   `Other-files/test_unreachable_pruning.py` tests each rule and checks that
+   the program has no attribute look-up by a name built at run time, which is
+   the one thing the pass cannot see.
+
+Two small files steer it:
 
 - [`tools/rt_host.py`](tools/rt_host.py): the window of this program
   with its measurement tabs (`RTE_MEASUREMENTS`: which scans each offers) and
@@ -191,7 +208,8 @@ python ci/run_suite.py
 - The main program's tests of these pages, run against this application. Tests
   of other pages in the same files were taken out with
   [`tools/prune_tests.py`](tools/prune_tests.py), which prints the reason for
-  each one it removes.
+  each one it removes, and the tests of the PPMS page's own code went when
+  that code did (2026-11-28).
 - Jiaze Li's tests of the package modules.
 - `Newmark_motor_test.py`, the stage's own test script with its simulator,
   which the stage tests use.

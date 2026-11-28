@@ -52,7 +52,7 @@ if "--package-self-test" in sys.argv:
         ("transport package", lambda: _imported(
             "transport.core.scan_sequences", "transport.core.scan_recording", "transport.core.scan_lifecycle",
             "transport.common.harmonics", "transport.common.settling", "transport.common.validation",
-            "transport.ppms.protocol", "transport.ppms.controllers.multivu")),
+            "transport.ppms.protocol")),
         ("SHHV & Switch application", _application),
     )
     lines = [f"Transport_RT package self-test: {sys.executable}"]

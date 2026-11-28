@@ -121,25 +121,6 @@ class ZurichControllerTests(unittest.TestCase):
         controller = app.NonLocalACController(lambda _m: None)
         return controller
 
-    def test_a_connected_zurich_the_scan_did_not_set_up_is_not_waited_for(self):
-        controller = self.controller()
-        controller.mfli_config = {"harmonic": 1}
-        controller._wait_mfli_reference = mock.Mock(return_value={"valid": True})
-        with mock.patch.object(type(controller), "mfli_connected", new_callable=mock.PropertyMock,
-                               return_value=True):
-            self.assertNotIn("mfli", controller.wait_references(17.3, threading.Event(), ()))
-            controller.mfli_in_scan = True
-            self.assertIn("mfli", controller.wait_references(17.3, threading.Event(), ()))
-
-    def test_a_stop_during_the_reference_wait_is_a_stop_not_a_key_error(self):
-        controller = self.controller()
-        controller.mfli_config = {"reference_source": "Trigger In 1"}
-        stop = threading.Event()
-        stop.set()
-        result = controller._wait_mfli_reference(17.3, stop)
-        self.assertFalse(result["valid"])
-        self.assertEqual(result["status"], 8)
-
     def test_unused_demodulators_follow_the_reference_routing(self):
         controller = self.controller()
         controller.mfli_bridge = mock.Mock()
@@ -247,16 +228,6 @@ class SR830Tests(unittest.TestCase):
         with mock.patch.object(app.time, "sleep", lambda s: None), \
                 self.assertRaisesRegex(RuntimeError, "status after 'HARM 2' is unreadable"):
             controller._write_sr830("8", "HARM 2")
-
-    def test_the_overload_latched_by_a_range_change_is_read_once_and_dropped(self):
-        lockin = self.Lockin()
-        controller = self.controller(lockin)
-        controller.lias_clear_pending["8"] = True
-        with mock.patch.object(app.time, "sleep", lambda s: None):
-            sample = controller._read_sample_one("8", 17.3, True, 0)
-        self.assertEqual(len(lockin.lias), 2, "one discarded LIAS? read")
-        self.assertEqual(sample["lia_status"], 0, "the latched overload is not counted")
-
 
 class BridgeTests(unittest.TestCase):
     def test_a_late_reply_is_not_taken_for_the_next_request(self):

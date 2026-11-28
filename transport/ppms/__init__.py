@@ -1,6 +1,5 @@
 """PPMS (Physical Property Measurement System) measurement subsystem."""
 
-from transport.ppms.controllers.multivu import PPMSMultiVuReadbackController
 from transport.ppms.protocol import (
     PPMS_FIELD_LIMIT_OE,
     PPMS_FIELD_RATE_LIMIT_OE_S,
@@ -15,7 +14,6 @@ from transport.ppms.protocol import (
 )
 
 __all__ = [
-    "PPMSMultiVuReadbackController",
     "PPMS_FIELD_LIMIT_OE",
     "PPMS_FIELD_RATE_LIMIT_OE_S",
     "PPMS_TEMPERATURE_LOW_BOUNDARY_K",

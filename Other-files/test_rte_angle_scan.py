@@ -1796,13 +1796,6 @@ class AnglePageTests(unittest.TestCase):
                 self.assertEqual([x for x, _y in series["SR830-1 P1 L1"]], xs)
                 self.assertEqual(panel._draw_nonlocal_series.call_args.kwargs["angle_x_range"], limits)
 
-    def test_the_ppms_page_has_no_angle_stage(self):
-        source = inspect.getsource(app.PPMSPanel)
-        self.assertNotIn("newmark", source.lower())
-        self.assertNotIn("rte_stage", source)
-        for name in ("start_ppms_field_scan", "_redraw_ppms_transport_plot", "safe_close_ppms"):
-            self.assertIsNot(getattr(app.PPMSPanel, name), getattr(app.RTEPanel, name))
-
     def build_page(self):
         """The real RTEPanel constructor on stand-in widgets (as test_rte_panel's)."""
         parent = Mock(closing=False)

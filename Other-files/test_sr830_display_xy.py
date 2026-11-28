@@ -107,24 +107,5 @@ class DisplayTests(unittest.TestCase):
         controller.connect("GPIB0::8::INSTR")
         self.assertEqual(session.log, [("query", "*IDN?")])
 
-    def test_nonlocal_connect_shows_x_and_y(self):
-        session = Session()
-        self.visa(session)
-        controller = app.NonLocalACController(self.logged.append)
-        self.assertEqual(controller.connect_lockin("8", "GPIB0::8::INSTR"), SR830)
-        self.assertEqual(session.log, [("write", "OUTX 1"), ("query", "*IDN?"), ("write", "OUTX 1"),
-                                       *SHOW_XY])
-        self.assertEqual(controller.connected_lockin_keys, ("8",))
-
-    def test_nonlocal_connect_stands_when_the_display_write_fails(self):
-        session = Session(refuse="DDEF")
-        self.visa(session)
-        controller = app.NonLocalACController(self.logged.append)
-        self.assertEqual(controller.connect_lockin("9", "GPIB0::9::INSTR"), SR830)
-        self.assertEqual(controller.connected_lockin_keys, ("9",))
-        self.assertFalse(session.closed)
-        self.assertIn("Non-local IV SR830 #9: the display was not set to X and Y: VI_ERROR_TMO", self.logged)
-
-
 if __name__ == "__main__":
     unittest.main()

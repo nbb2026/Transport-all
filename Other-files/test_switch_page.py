@@ -179,7 +179,6 @@ class SwitchPageTests(unittest.TestCase):
         """User, 2026-11-22: "change the name of SHHV to SHHV & Switch.
         delete the before Switch module".  The tab's title only: the page's
         texts, files, columns and controllers still say SHHV."""
-        self.assertEqual(app.RTE_TAB_TITLE, "SHHV & Switch")
         self.assertFalse(hasattr(app, "SwitchPanel"))
         self.assertEqual(app.RTEPanel.ppms_page_name, "SHHV")
         with open(app.__file__, encoding="utf-8") as source:
@@ -386,8 +385,6 @@ class SwitchPageTests(unittest.TestCase):
                 panel._ppms_sr830_address(bad)
         self.assertEqual([app.PPMS_DEFAULT_RESOURCES[key] for key in app.PPMS_SR830_KEYS],
                          ["GPIB0::8::INSTR", "GPIB0::9::INSTR", "GPIB0::10::INSTR"])
-        with self.assertRaisesRegex(ValueError, "8, 9 or 10"):
-            app.CombinedControlApp._ppms_sr830_address("GPIB0::11::INSTR")
 
     def test_the_plan_is_the_pulse_loop(self):
         plan = app.rte_scan_plan("Switch", "-2", "2", "2", 1, True)

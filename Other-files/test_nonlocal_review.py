@@ -121,25 +121,6 @@ class ZurichControllerTests(unittest.TestCase):
         controller = app.NonLocalACController(lambda _m: None)
         return controller
 
-    def test_a_connected_zurich_the_scan_did_not_set_up_is_not_waited_for(self):
-        controller = self.controller()
-        controller.mfli_config = {"harmonic": 1}
-        controller._wait_mfli_reference = mock.Mock(return_value={"valid": True})
-        with mock.patch.object(type(controller), "mfli_connected", new_callable=mock.PropertyMock,
-                               return_value=True):
-            self.assertNotIn("mfli", controller.wait_references(17.3, threading.Event(), ()))
-            controller.mfli_in_scan = True
-            self.assertIn("mfli", controller.wait_references(17.3, threading.Event(), ()))
-
-    def test_a_stop_during_the_reference_wait_is_a_stop_not_a_key_error(self):
-        controller = self.controller()
-        controller.mfli_config = {"reference_source": "Trigger In 1"}
-        stop = threading.Event()
-        stop.set()
-        result = controller._wait_mfli_reference(17.3, stop)
-        self.assertFalse(result["valid"])
-        self.assertEqual(result["status"], 8)
-
     def test_unused_demodulators_follow_the_reference_routing(self):
         controller = self.controller()
         controller.mfli_bridge = mock.Mock()
@@ -164,46 +145,6 @@ class ZurichControllerTests(unittest.TestCase):
             controller.mfli_bridge.reset_mock()
             controller.disable_unused_ppms_demods("1")
             controller.mfli_bridge.request.assert_not_called()
-
-    def test_mf_md_is_the_option_or_a_fourth_demodulator_not_the_second(self):
-        """User, 2026-11-27 (DEV4435 on the SHHV page: "extrefs/1/demodselect"
-        not found): an MFLI without MF-MD has a second demodulator too, so
-        that is no sign of MF-MD; the options say it, or else a fourth
-        demodulator.  Reads then cover only the demodulators there are."""
-        controller = self.controller()
-        controller.mfli_bridge = mock.Mock()
-        for props, multi in (({"options": "MD"}, True), ({"options": "IA"}, False),
-                             ({"options": "", "has_demod_2": True, "has_demod_4": False}, False),
-                             ({"options": "", "has_demod_2": True, "has_demod_4": True}, True),
-                             ({"options": "", "has_demod_2": True}, False)):
-            with self.subTest(props=props):
-                controller.mfli_props = dict(props)
-                self.assertIs(controller.mfli_has_multi_demod(), multi)
-        controller.mfli_props = {"options": "", "has_demod_2": True, "has_demod_4": False}
-        demod = {"x": 1e-6, "y": 0.0, "frequency": 317.3, "timestamp": 1, "harmonic": 1, "adcselect": 0, "enabled": 1}
-        reference = dict(demod, adcselect=8)      # Demod 2 follows the reference input
-        controller.mfli_bridge.request.return_value = {"demods": [demod, reference]}
-        with mock.patch.object(type(controller), "mfli_connected", new_callable=mock.PropertyMock, return_value=True):
-            fields = controller.read_mfli_four_demods()
-        controller.mfli_bridge.request.assert_called_once_with("read_demods", count=2)
-        self.assertEqual((fields["zurich_demod1_x_v"], fields["zurich_demod1_status"]), (1e-6, "enabled"))
-        self.assertEqual((fields["zurich_demod2_input"], fields["zurich_demod2_status"]), (8, "enabled"))
-        self.assertEqual([fields[f"zurich_demod{i}_status"] for i in (3, 4)], ["disabled"] * 2)
-        # Review, 2026-11-27: without MF-MD the reference goes on Demod 2, as
-        # before (a reference on the measuring demodulator would lock to f/n
-        # at harmonic n); Demod 4 is refused.
-        with self.assertRaisesRegex(RuntimeError, "Demod 4 external reference requires MF-MD"):
-            controller.configure_mfli("AC", 2, "R", reference_source="Aux Input 1", sample_rate_hz=app.NONLOCAL_SAMPLE_HZ,
-                                      input_impedance="10 MΩ", input_scaling=1.0, timeconstant_s=1.0,
-                                      external_reference_demodulator=3)
-        controller.mfli_bridge.request.reset_mock()
-        controller.mfli_bridge.request.side_effect = RuntimeError("stop after the request")
-        with self.assertRaisesRegex(RuntimeError, "stop after the request"):
-            controller.configure_mfli("AC", 2, "R", reference_source="Aux Input 1", sample_rate_hz=app.NONLOCAL_SAMPLE_HZ,
-                                      input_impedance="10 MΩ", input_scaling=1.0, timeconstant_s=1.0)
-        self.assertEqual(controller.mfli_bridge.request.call_args.kwargs["extref_demod"], 1)
-        self.assertEqual(controller.mfli_bridge.request.call_args.kwargs["harmonic"], 2)
-
 
 class SR830Tests(unittest.TestCase):
     class Lockin:
@@ -247,16 +188,6 @@ class SR830Tests(unittest.TestCase):
         with mock.patch.object(app.time, "sleep", lambda s: None), \
                 self.assertRaisesRegex(RuntimeError, "status after 'HARM 2' is unreadable"):
             controller._write_sr830("8", "HARM 2")
-
-    def test_the_overload_latched_by_a_range_change_is_read_once_and_dropped(self):
-        lockin = self.Lockin()
-        controller = self.controller(lockin)
-        controller.lias_clear_pending["8"] = True
-        with mock.patch.object(app.time, "sleep", lambda s: None):
-            sample = controller._read_sample_one("8", 17.3, True, 0)
-        self.assertEqual(len(lockin.lias), 2, "one discarded LIAS? read")
-        self.assertEqual(sample["lia_status"], 0, "the latched overload is not counted")
-
 
 class BridgeTests(unittest.TestCase):
     def test_a_late_reply_is_not_taken_for_the_next_request(self):

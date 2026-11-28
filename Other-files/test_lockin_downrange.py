@@ -13,9 +13,9 @@ The loops it could run into, and what stops each:
 - the Zurich, whose firmware chooses the range: a "low" autorange that
   keeps the range was asked for again every few readings for good.
 
-Here: the ST-FMR and Non-local SR830 rules and the Zurich's, each against a
-stand-in instrument.  The PPMS / SHHV rule is in test_review_fixes,
-test_ppms_sr830_tc and test_rte_panel.
+Here: the ST-FMR SR830 rule and the Zurich's, each against a stand-in
+instrument (the Non-local SR830 rule is not in this program: its tests went
+with that code on 2026-11-28).
 """
 import inspect
 import unittest
@@ -233,91 +233,6 @@ class StfmrSR830Tests(SR830RuleTests, Rule):
         for _ in range(10):
             self.assertEqual(step(1e-9, 0, False), "")
         self.assertEqual(step(0.9 * SCALES[17], 0, False), "SENS 17->18 (overload/high)")
-
-
-class NonLocalSR830Tests(SR830RuleTests, Rule):
-    def make(self, index, overloads_below=0):
-        device = SR830(index, overloads_below)
-        self.controller = controller = app.NonLocalACController(lambda _text: None)
-        controller.lockins["8"] = device
-        controller.sensitivity_indices["8"] = index
-        controller.low_range_counts["8"] = controller.range_cooldowns["8"] = 0
-        return device, lambda r_v, status: controller._auto_range("8", r_v, status)
-
-    def new_set_up(self):
-        # configure() sets these at a scan's Start.
-        self.controller.overload_floors["8"] = 0
-        self.controller.range_cooldowns["8"] = self.controller.low_range_counts["8"] = 0
-
-    def test_configure_and_connect_forget_the_floor(self):
-        import inspect
-        self.assertIn('setdefault("overload_floors", {})[key] = 0',
-                      inspect.getsource(app.NonLocalACController.configure))
-        self.assertIn('setdefault("overload_floors", {}).pop(key, None)',
-                      inspect.getsource(app.NonLocalACController.connect_lockin))
-
-    def test_the_next_order_of_a_6221_iv_pass_starts_without_the_floor(self):
-        """Review, 2026-11-16: set_lockin_harmonic put the next order at
-        SENS 9 under the last order's floor (17), where it could never step
-        down."""
-        device, step = self.make(16, overloads_below=17)
-        controller = self.controller
-        controller.lockin_harmonics["8"] = 1
-        self.run_readings(device, step, None, 10, volts=20e-9)
-        self.assertEqual((device.index, controller.overload_floors["8"]), (17, 17))
-        device.overloads_below = 0
-        controller.set_lockin_harmonic("8", 2)
-        self.assertEqual((device.index, controller.overload_floors["8"]), (9, 0))
-        actions = [a for a in self.run_readings(device, step, None, 60, volts=1e-9) if a]
-        self.assertEqual(actions[0], "SENS 9->8 (low)")
-        self.assertEqual(device.index, 5, "1 nV on 100 nV: 1 %")
-
-    def test_gate_vi_keeps_a_floor_for_each_order(self):
-        """Gate-VI switches the order at every point and comes back to each
-        order's own last range: its floor comes back with it, or the guard
-        would be gone at every point."""
-        device, step = self.make(14, overloads_below=14)
-        controller = self.controller
-        controller.lockin_harmonics["8"] = 1
-        self.run_readings(device, step, None, 60, volts=20e-9)
-        self.assertEqual((device.index, controller.overload_floors["8"]), (14, 14))
-        device.overloads_below = 0
-        controller.set_lockin_harmonic("8", 2)              # the first time: the configure range
-        self.assertEqual(controller.overload_floors["8"], 0)
-        device.overloads_below = 14
-        controller.set_lockin_harmonic("8", 1, sensitivity_index=14)
-        self.assertEqual((device.index, controller.overload_floors["8"]), (14, 14))
-        self.assertEqual(self.run_readings(device, step, None, 60, volts=20e-9), [""] * 60)
-        controller.set_lockin_harmonic("8", 2, sensitivity_index=9)
-        self.assertEqual(controller.overload_floors["8"], 0)
-
-    def test_an_unreadable_status_steps_no_range_down(self):
-        """Review, 2026-11-16: it was passed on as "locked, no overload"."""
-        device, _step = self.make(17)
-        controller = self.controller
-        device.r_v = 1e-9
-        with mock.patch.object(controller, "_query_sr830_status", return_value=None):
-            samples = [controller._read_sample_one("8", 17.0, True, 0) for _ in range(12)]
-        self.assertEqual([sample["auto_range"] for sample in samples], [""] * 12)
-        self.assertEqual(device.index, 17)
-        # R alone still steps it up.
-        device.r_v = 0.9 * SCALES[17]
-        with mock.patch.object(controller, "_query_sr830_status", return_value=None):
-            self.assertEqual(controller._read_sample_one("8", 17.0, True, 0)["auto_range"],
-                             "SENS 17->18 (overload/high)")
-
-    def test_each_sr830_has_its_own_floor(self):
-        device, step = self.make(14, overloads_below=14)
-        other = SR830(14)
-        controller = self.controller
-        controller.lockins["9"] = other
-        controller.sensitivity_indices["9"] = 14
-        controller.low_range_counts["9"] = controller.range_cooldowns["9"] = 0
-        device.overloads_below = 15
-        self.run_readings(device, step, None, 60, volts=20e-9)
-        self.assertEqual((device.index, controller.overload_floors), (15, {"8": 15}))
-        actions = [controller._auto_range("9", 20e-9, 0) for _ in range(4)]
-        self.assertEqual([a for a in actions if a], ["SENS 14->13 (low)"])
 
 
 class Firmware:

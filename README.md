@@ -106,8 +106,23 @@ python tools/extract_app.py tools/fmr_host.py /path/to/main/Transport_all.py
 ```
 
 Starting from the two pages, it keeps every function, class, constant and
-method they reach, and nothing of the other pages: about 14,200 of the
-main program's 40,500 lines. Two small files steer it:
+method they reach, and nothing of the other pages: about 13,700 of the
+main program's 40,600 lines. It works in two passes:
+
+1. By name: whatever the pages, the window and what they use *name* is kept
+   (14,191 lines).
+2. By reach (`prune_unreachable`, turned on by `PRUNE_ROOTS` in the steering
+   file, since 2026-11-28): from `main`, it follows which object each method
+   is called on, as Python looks a method up, and takes out what the program
+   cannot get to: the Non-local page's reading, sweep and nanovoltmeter code and the PPMS page's Zurich harmonics in the instrument class these pages share, and helpers only tests called. Their tests went with
+   them. A method name used on an unknown object, or in a string, still keeps
+   that method in every class that is used, so it errs on the side of keeping;
+   code it cannot follow stops the tool instead of being guessed at.
+   `Other-files/test_unreachable_pruning.py` tests each rule and checks that
+   the program has no method look-up by a name built at run time, which is the
+   one thing the pass cannot see.
+
+Two small files steer it:
 
 - [`tools/fmr_host.py`](tools/fmr_host.py): the window of this program
   and its close, and the list of parts left out.

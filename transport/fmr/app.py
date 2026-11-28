@@ -21,7 +21,7 @@ import time
 import tkinter as tk
 import weakref
 from contextlib import contextmanager
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tkinter import filedialog, font as tkfont, messagebox, simpledialog, ttk
 from typing import Callable
@@ -382,8 +382,6 @@ def _windows_drive_size(root: str) -> int:
     if not size(root, None, ctypes.byref(total), None):
         raise OSError("the drive's size could not be read")
     return int(total.value)
-def recycle_bin_available(folder) -> bool:
-    return not recycle_bin_refusal(folder)
 def move_folder_to_recycle_bin(folder, window_handle: int = 0) -> None:
     if sys.platform != "win32":
         raise OSError("There is no Recycle Bin on this computer.")
@@ -2849,9 +2847,6 @@ class LakeShoreMagnetSupplyController(SafeVisaIdentityController):
         self.resource_name = ""
         self.identity = ""
         release_instrument_lease(resource_name, self)
-    def safe_output_off(self) -> None:
-        if self.instrument is not None:
-            self.zero()
     def disconnect(self, closing: bool = False) -> None:
         with self.lock:
             if self.instrument is None and self.resource_manager is None:
@@ -3388,13 +3383,6 @@ class STFMRSR830Controller(SafeVisaIdentityController):
         with self.lock:
             self.overload_floor = 0
             self.lias_clear_pending = True
-    def auto_phase(self) -> float:
-        with self.lock:
-            if self.instrument is None:
-                raise RuntimeError("SR830 is not connected")
-            self.instrument.write("APHS")
-            time.sleep(0.25)
-            return float(self.instrument.query("PHAS?").strip())
     def read_sample(self, expected_frequency_hz: float, auto_range: bool=True, allow_down: bool=True) -> dict[str, object]:
         with self.lock:
             if self.instrument is None:
@@ -4636,19 +4624,8 @@ class NonLocalACController:
     def source_connected(self) -> bool:
         return self.source is not None
     @property
-    def any_connected(self) -> bool:
-        return self.source is not None or bool(self.lockins) or self.mfli_connected or (self.nanovoltmeter is not None)
-    @property
-    def shared_source_lockin_connected(self) -> bool:
-        return self.source is not None or bool(self.lockins)
-    @property
-    def nanovoltmeter_connected(self) -> bool:
-        return self.nanovoltmeter is not None
-    @property
     def mfli_connected(self) -> bool:
         return self.mfli_daq is not None or self.mfli_bridge is not None
-    def lockin_connected(self, key: str) -> bool:
-        return str(key) in self.lockins
     @property
     def connected_lockin_keys(self) -> tuple[str, ...]:
         return tuple(sorted(self.lockins, key=int))
@@ -4753,18 +4730,6 @@ class NonLocalACController:
                 "front_autozero": True,
                 "measurement_mode": "DC voltage (not phase-sensitive)",
             }
-    def read_nanovoltmeter(self) -> float:
-        with self.lock:
-            if self.nanovoltmeter is None:
-                raise RuntimeError("Keithley 2182A is not connected")
-            response = self.nanovoltmeter.query(":READ?").strip()
-            try:
-                value = float(response.split(",", 1)[0].strip())
-            except ValueError as error:
-                raise RuntimeError(f'2182A :READ? response cannot be parsed: {response!r}') from error
-            if not math.isfinite(value):
-                raise RuntimeError(f"2182A returned a non-finite voltage: {response!r}")
-            return value
     def _query_sr830_numbers(self, key: str, command: str, expected_count: int) -> tuple[float, ...]:
         lockin = self.lockins[key]
         last_response = ""
@@ -4788,44 +4753,6 @@ class NonLocalACController:
                     pass
                 time.sleep(0.08)
         raise RuntimeError(f'SR830 #{key} query {command!r} repeatedly returned non-numeric/abnormal replies: {last_response!r}') from last_error
-    def _query_sr830_status(self, key: str) -> int | None:
-        try:
-            value = self._query_sr830_numbers(key, "LIAS?", 1)[0]
-            if not (math.isfinite(value) and float(value).is_integer() and 0 <= value <= 255):
-                raise ValueError(f"not a status byte: {value!r}")
-            return int(value)
-        except Exception as error:
-            self.logger(f'SR830 #{key} LIAS? reply unreadable ({error}); not asked again (it clears as it is read): the reading counts as overloaded')
-            try:
-                self.lockins[key].clear()
-            except Exception:
-                pass
-            time.sleep(0.08)
-            return None
-    def read_sr830_time_constants(self, keys) -> dict[str, float]:
-        values = {}
-        with self.lock:
-            for key in keys:
-                key = str(key)
-                if key not in self.lockins:
-                    raise RuntimeError(f"SR830 #{key} is not connected")
-                code = int(self._query_sr830_numbers(key, "OFLT?", 1)[0])
-                if not 0 <= code < len(SR830_TIME_CONSTANTS_S):
-                    raise RuntimeError(f"SR830 #{key} time-constant readback is invalid: OFLT {code}")
-                values[key] = SR830_TIME_CONSTANTS_S[code]
-        return values
-    def read_sr830_filter_slopes(self, keys) -> dict[str, float]:
-        values = {}
-        with self.lock:
-            for key in keys:
-                key = str(key)
-                if key not in self.lockins:
-                    raise RuntimeError(f"SR830 #{key} is not connected")
-                code = int(self._query_sr830_numbers(key, "OFSL?", 1)[0])
-                if not 0 <= code <= 3:
-                    raise RuntimeError(f"SR830 #{key} filter-slope readback is invalid: OFSL {code}")
-                values[key] = 6.0 * (code + 1)
-        return values
     def _ensure_resource_manager(self):
         if pyvisa is None:
             raise RuntimeError("pyvisa is missing; please run: py -m pip install pyvisa pyvisa-py")
@@ -4914,38 +4841,6 @@ class NonLocalACController:
                 self._close_manager_if_unused()
                 release_instrument_lease(resource, self)
                 raise
-    def connect_nanovoltmeter(self, resource: str) -> str:
-        with self.lock:
-            if self.nanovoltmeter is not None:
-                return self.nanovoltmeter_identity
-            acquire_instrument_lease(resource, self, "Non-local Keithley 2182A")
-            meter = None
-            try:
-                manager = self._ensure_resource_manager()
-                meter = manager.open_resource(resource)
-                self._configure_transport(meter)
-                identity = meter.query("*IDN?").strip()
-                if "2182" not in identity.upper():
-                    raise RuntimeError(f"{resource} is not a Keithley 2182A: {identity}")
-                try:
-                    meter.clear()
-                except Exception:
-                    pass
-                meter.write("*CLS")
-                self.nanovoltmeter = meter
-                self.nanovoltmeter_identity = identity
-                self.nanovoltmeter_resource = resource
-                self.logger(f"Non-local IV Keithley 2182A connected: {identity}")
-                return identity
-            except BaseException:
-                if meter is not None:
-                    try:
-                        meter.close()
-                    except BaseException:
-                        pass
-                self._close_manager_if_unused()
-                release_instrument_lease(resource, self)
-                raise
     @staticmethod
     def _mfli_reachable_servers(timeout_s: float=1.2, candidates=None) -> tuple[list[tuple[str, int]], list[str]]:
         reachable = []
@@ -4958,40 +4853,6 @@ class NonLocalACController:
             except OSError as error:
                 diagnostics.append(f"{host}:{port}=unreachable ({error})")
         return reachable, diagnostics
-    def configure_second_harmonic(self, tau, rate=NONLOCAL_SAMPLE_HZ):
-        with self.lock:
-            if self.mfli_config.get('extref_demodulator') not in (1, 3) or self.mfli_config.get('harmonic') != 1:
-                raise RuntimeError('Simultaneous measurement requires MF-MD: Demod 1 measures 1st harmonic, Demod 2 external reference, Demod 3 measures 2nd harmonic')
-            if self.mfli_bridge is not None:
-                self.mfli_bridge.request('configure_second_harmonic', timeconstant=tau, rate=rate, order=NONLOCAL_LOCKIN_FILTER_ORDER)
-                return
-            index = 1 if self.mfli_config['extref_demodulator'] == 3 else 2
-            base = f'/{self.mfli_device}/demods/{index}/'
-            for name, value in (('adcselect', 0), ('oscselect', 0), ('harmonic', 2), ('order', NONLOCAL_LOCKIN_FILTER_ORDER), ('enable', 1)):
-                self.mfli_daq.setInt(base + name, value)
-            self.mfli_daq.setDouble(base + 'timeconstant', tau)
-            self.mfli_daq.setDouble(base + 'rate', rate)
-            self.mfli_daq.sync()
-            for name, value in (('adcselect', 0), ('oscselect', 0), ('harmonic', 2), ('enable', 1)):
-                if self.mfli_daq.getInt(base + name) != value:
-                    raise RuntimeError('Zurich 2nd-harmonic configuration readback mismatch: ' + name)
-    def configure_third_harmonic(self, tau, rate=NONLOCAL_SAMPLE_HZ):
-        with self.lock:
-            if self.mfli_config.get('extref_demodulator') not in (1, 3) or self.mfli_config.get('harmonic') != 1:
-                raise RuntimeError('Simultaneous measurement requires MF-MD: Demod 1 measures 1st harmonic, Demod 2 external reference, Demod 4 measures 3rd harmonic')
-            if self.mfli_bridge is not None:
-                self.mfli_bridge.request('configure_third_harmonic', timeconstant=tau, rate=rate, order=NONLOCAL_LOCKIN_FILTER_ORDER)
-                return
-            index = 2 if self.mfli_config['extref_demodulator'] == 3 else 3
-            base = f'/{self.mfli_device}/demods/{index}/'
-            for name, value in (('adcselect', 0), ('oscselect', 0), ('harmonic', 3), ('order', NONLOCAL_LOCKIN_FILTER_ORDER), ('enable', 1)):
-                self.mfli_daq.setInt(base + name, value)
-            self.mfli_daq.setDouble(base + 'timeconstant', tau)
-            self.mfli_daq.setDouble(base + 'rate', rate)
-            self.mfli_daq.sync()
-            for name, value in (('adcselect', 0), ('oscselect', 0), ('harmonic', 3), ('enable', 1)):
-                if self.mfli_daq.getInt(base + name) != value:
-                    raise RuntimeError('Zurich 3rd-harmonic configuration readback mismatch: ' + name)
     def disable_unused_ppms_demods(self, mode):
         extref = self.mfli_config.get('extref_demodulator')
         measuring = (0, 1, 2) if extref == 3 else (0, 2, 3) if extref == 1 and self.mfli_has_multi_demod() else (0,)
@@ -5623,50 +5484,6 @@ class NonLocalACController:
             "input_overload": input_overload,
             "auto_range": "",
         }
-    def read_mfli_four_demods(self):
-        with self.lock:
-            if not self.mfli_connected:
-                raise RuntimeError("Zurich MFLI is not connected")
-            count = 4 if self.mfli_has_multi_demod() else 2 if self.mfli_props.get("has_demod_2") else 1
-            if self.mfli_bridge is not None:
-                channels = self.mfli_bridge.request("read_demods", count=count)["demods"]
-            else:
-                channels = []
-                for index in range(count):
-                    node = f"/{self.mfli_device}/demods/{index}"
-                    enabled = int(self.mfli_daq.getInt(node + "/enable"))
-                    if not enabled:
-                        channels.append(dict(enabled=0))
-                        continue
-                    raw = self.mfli_daq.getSample(node + "/sample")
-                    try:
-                        timestamp = self._mfli_scalar(raw, "timestamp")
-                    except (RuntimeError, KeyError):
-                        timestamp = None
-                    channels.append(dict(x=self._mfli_scalar(raw, "x"), y=self._mfli_scalar(raw, "y"),
-                        frequency=self._mfli_scalar(raw, "frequency"), timestamp=timestamp,
-                        harmonic=int(self.mfli_daq.getInt(node + "/harmonic")),
-                        adcselect=int(self.mfli_daq.getInt(node + "/adcselect")), enabled=enabled))
-            channels = list(channels) + [dict(enabled=0)] * (4 - len(channels))
-            if len(channels) != 4:
-                raise RuntimeError("Zurich must read back all four Demod channels")
-            fields = {}
-            for index, channel in enumerate(channels, 1):
-                prefix = f'zurich_demod{index}_'
-                if not channel['enabled']:
-                    fields.update({prefix + key: '' for key in ('x_v', 'y_v', 'r_v', 'theta_deg', 'frequency_hz', 'timestamp_ticks', 'harmonic', 'input')})
-                    fields.update({prefix+'enabled': 0, prefix+'status': 'disabled'})
-                    continue
-                x, y, frequency = (float(channel[k]) for k in ('x', 'y', 'frequency'))
-                if not all(math.isfinite(v) for v in (x, y, frequency)):
-                    raise RuntimeError(f"Zurich Demod {index} readback is invalid")
-                prefix = f'zurich_demod{index}_'
-                fields.update({prefix+'x_v': x, prefix+'y_v': y, prefix+'r_v': math.hypot(x, y),
-                    prefix+'theta_deg': math.degrees(math.atan2(y, x)), prefix+'frequency_hz': frequency,
-                    prefix+'timestamp_ticks': channel.get('timestamp') if channel.get('timestamp') is not None else '',
-                    prefix+'harmonic': channel['harmonic'], prefix+'input': channel['adcselect'],
-                    prefix+'enabled': channel['enabled'], prefix+'status': 'enabled'})
-            return fields
     def connect(self, source_resource: str, lockin_resources: dict[str, str]) -> tuple[str, dict[str, str]]:
         if not lockin_resources:
             raise ValueError("Select at least one SR830")
@@ -5891,110 +5708,6 @@ class NonLocalACController:
             if use_nanovoltmeter:
                 readbacks['2182'] = {'meter_type': '2182A', **self.configure_nanovoltmeter(channel=1, nplc=1.0)}
             return actual_frequency, readbacks
-    def set_current(self, rms_ma: float, frequency_hz: float) -> float:
-        with self.lock:
-            if not math.isfinite(float(rms_ma)):
-                raise ValueError("6221 current must be a finite value")
-            if self.source_output_mode == "DC":
-                if abs(float(rms_ma)) > 105.0:
-                    raise ValueError("6221 DC current must be within ±105 mA")
-                requested_a = float(rms_ma) * 1e-3
-                self.output_enabled = True
-                for command in (f'SOUR:CURR {requested_a:.12e}', 'OUTP ON'):
-                    self._write_6221(command)
-                output_state = int(self._query_float(self.source, "OUTP?"))
-                readback_a = self._query_float(self.source, "SOUR:CURR?")
-                if output_state != 1:
-                    raise RuntimeError("6221 DC output did not turn on successfully")
-                if not math.isclose(readback_a, requested_a, rel_tol=0.0005, abs_tol=1e-12):
-                    raise RuntimeError(f'6221 DC current readback mismatch: {readback_a:g} A')
-                self.output_enabled = True
-                return readback_a * 1e3
-            if float(rms_ma) <= 0:
-                raise ValueError("6221 AC RMS current must be a finite positive number")
-            if not 1e-3 <= float(frequency_hz) <= 1e5:
-                raise ValueError("6221 waveform frequency must be within 0.001–100000 Hz")
-            peak_a = math.sqrt(2.0) * float(rms_ma) * 1e-3
-            if peak_a > NONLOCAL_MAX_PEAK_A:
-                raise ValueError("6221 sine-wave peak exceeds 105 mA")
-            self.output_enabled = True
-            for command in ('SOUR:WAVE:ABOR', f'SOUR:WAVE:AMPL {peak_a:.12e}', 'SOUR:WAVE:ARM', 'SOUR:WAVE:INIT'):
-                self._write_6221(command)
-            if int(self._query_float(self.source, "OUTP?")) != 1:
-                raise RuntimeError("6221 sine wave did not turn on successfully")
-            actual_frequency = self._query_float(self.source, "SOUR:WAVE:FREQ?")
-            if not math.isclose(actual_frequency, frequency_hz, rel_tol=5e-3, abs_tol=0.1):
-                raise RuntimeError(f'6221 frequency readback mismatch: {actual_frequency:g} Hz')
-            self.output_enabled = True
-            peak_readback = self._query_float(self.source, "SOUR:WAVE:AMPL?")
-            if not math.isclose(peak_readback, peak_a, rel_tol=5e-4, abs_tol=1e-12):
-                raise RuntimeError(f'6221 current amplitude readback mismatch: {peak_readback:g} Apeak')
-            return peak_readback / math.sqrt(2.0) * 1e3
-    def wait_references(self, frequency_hz: float, stop_event: threading.Event, lockin_keys: tuple[str, ...] | None=None) -> dict[str, dict]:
-        keys = tuple(lockin_keys) if lockin_keys is not None else self.connected_lockin_keys
-        results = {key: self._wait_reference_one(key, frequency_hz, stop_event) for key in keys}
-        if self.mfli_connected and self.mfli_config and self.__dict__.get("mfli_in_scan"):
-            results['mfli'] = self._wait_mfli_reference(frequency_hz, stop_event)
-        return results
-    def _wait_mfli_reference(self, frequency_hz: float, stop_event: threading.Event) -> dict:
-        if self.mfli_initial_autorange_pending and not stop_event.is_set():
-            with self.lock:
-                action = self._run_mfli_autorange("initial")
-            self.logger(f"Non-local MFLI auto-range: {action}")
-        deadline = time.monotonic() + 5.0
-        last_sample = {
-            "reference_valid": False,
-            "reference_frequency_hz": math.nan,
-            "lia_status": 8,
-            "status_text": (
-                f"{self.mfli_config.get('reference_source', NONLOCAL_MFLI_DEFAULT_REFERENCE_INPUT)} "
-                "external reference not locked"
-            ),
-        }
-        while time.monotonic() < deadline and not stop_event.is_set():
-            with self.lock:
-                last_sample = self.read_mfli(frequency_hz)
-            if last_sample["reference_valid"]:
-                break
-            stop_event.wait(0.1)
-        return {
-            "valid": bool(last_sample["reference_valid"]),
-            "frequency_hz": float(last_sample["reference_frequency_hz"]),
-            "status": int(last_sample["lia_status"]),
-            "status_text": str(last_sample["status_text"]),
-            "reference_source": str(
-                self.mfli_config.get(
-                    "reference_source",
-                    NONLOCAL_MFLI_DEFAULT_REFERENCE_INPUT,
-                )
-            ),
-        }
-    def _wait_reference_one(self, key: str, frequency_hz: float, stop_event: threading.Event) -> dict:
-        deadline = time.monotonic() + 5.0
-        last_frequency = math.nan
-        last_status = 8
-        while time.monotonic() < deadline and not stop_event.is_set():
-            with self.lock:
-                lockin = self.lockins[key]
-                last_frequency = self._query_sr830_numbers(key, "FREQ?", 1)[0]
-                status = self._query_sr830_status(key)
-                last_status = self.SR830_LIAS_UNREADABLE if status is None else status
-            if not last_status & 8 and math.isclose(last_frequency, frequency_hz, rel_tol=0.005, abs_tol=0.1):
-                return {"valid": True, "frequency_hz": last_frequency, "status": last_status}
-            stop_event.wait(0.1)
-        return {"valid": False, "frequency_hz": last_frequency, "status": last_status}
-    @staticmethod
-    def _status_text(status: int) -> str:
-        labels = []
-        if status & 1:
-            labels.append("input/Reserve overload")
-        if status & 2:
-            labels.append("filter overload")
-        if status & 4:
-            labels.append("output overload")
-        if status & 8:
-            labels.append("reference not locked")
-        return "; ".join(labels) if labels else "OK"
     def _run_mfli_autorange(self, reason: str) -> str:
         if not self.mfli_connected:
             raise RuntimeError("Zurich MFLI is not connected")
@@ -6092,123 +5805,6 @@ class NonLocalACController:
             sample["auto_range"] = action
             sample["input_range_after_v"] = self.mfli_config["input_range_v"]
         return sample
-    def _auto_range(self, key: str, r_v: float, status: int) -> str:
-        old = self.sensitivity_indices[key]
-        utilization = abs(r_v) / NONLOCAL_SR830_FULL_SCALE_V[old]
-        requested = old
-        reason = ""
-        overloaded = bool(status & 0x07)
-        floors = self.__dict__.setdefault("overload_floors", {})
-        floor = int(floors.get(key) or 0)
-        if overloaded or utilization >= LOCKIN_UPRANGE_FRACTION:
-            requested = min(old + 1, len(NONLOCAL_SR830_FULL_SCALE_V) - 1)
-            reason = "overload/high"
-            self.low_range_counts[key] = 0
-        elif self.range_cooldowns[key] > 0:
-            self.range_cooldowns[key] -= 1
-            self.low_range_counts[key] = 0
-        elif utilization < LOCKIN_DOWNRANGE_FRACTION and old > floor and not status & 0x08:
-            self.low_range_counts[key] += 1
-            if self.low_range_counts[key] >= 3:
-                requested = old - 1
-                reason = "low"
-                self.low_range_counts[key] = 0
-        else:
-            self.low_range_counts[key] = 0
-        if requested != old:
-            self._write_sr830(key, f"SENS {requested}")
-            actual = int(self._query_sr830_numbers(key, "SENS?", 1)[0])
-            if actual != requested:
-                raise RuntimeError(f"SR830 #{key} auto-range readback is inconsistent")
-            self.sensitivity_indices[key] = actual
-            self.range_cooldowns[key] = 3
-            self.lias_clear_pending[key] = True
-            if overloaded and actual > old and utilization < LOCKIN_UPRANGE_FRACTION:
-                floors[key] = max(floor, actual)
-            return f"SENS {old}->{actual} ({reason})"
-        return ""
-    def read_samples(self, expected_frequency_hz: float, measurement_keys: tuple[str, ...] | None=None) -> dict[str, dict]:
-        with self.lock:
-            keys = tuple(measurement_keys) if measurement_keys is not None else self.connected_lockin_keys
-            output_on = int(self._query_float(self.source, "OUTP?")) == 1
-            measurement_condition = int(self._query_float(self.source, 'STAT:MEAS:COND?'))
-            samples = {}
-            for key in keys:
-                if key == "2182":
-                    voltage = self.read_nanovoltmeter()
-                    samples[key] = {
-                        "meter_type": "2182A",
-                        "voltage": voltage,
-                        "X": math.nan,
-                        "Y": math.nan,
-                        "R": voltage,
-                        "phase_deg": math.nan,
-                        "reference_frequency_hz": math.nan,
-                        "lia_status": 0,
-                        "status_text": "2182A DC sample (not AC lock-in)",
-                        "reference_valid": True,
-                        "measurement_valid": not bool(measurement_condition & 8),
-                        "output_on": output_on,
-                        "measurement_condition": measurement_condition,
-                        "in_compliance": bool(measurement_condition & 8),
-                        "sensitivity_index": "",
-                        "auto_range": "",
-                    }
-                elif key == "mfli":
-                    sample = self.read_mfli(expected_frequency_hz)
-                    if sample.get('input_overload') is True and self.__dict__.get('mfli_auto_range_enabled', True):
-                        sample["auto_range"] = self._run_mfli_autorange("input overload")
-                    elif sample.get("input_extrema_valid", True):
-                        sample["auto_range"] = self._auto_range_mfli(sample)
-                    else:
-                        sample["auto_range"] = ""
-                    sample.update(output_on=output_on, measurement_condition=measurement_condition, in_compliance=bool(measurement_condition & 8))
-                    sample["measurement_valid"] = bool(
-                        sample["reference_valid"]
-                        and not sample["lia_status"]
-                        and not sample["in_compliance"]
-                        and not sample["auto_range"]
-                        and sample.get("input_overload") is not True
-                    )
-                    samples[key] = sample
-                else:
-                    sample = self._read_sample_one(key, expected_frequency_hz, output_on, measurement_condition)
-                    sample["meter_type"] = "SR830"
-                    sample["voltage"] = sample["R"]
-                    samples[key] = sample
-            return samples
-    def _read_sample_one(self, key: str, expected_frequency_hz: float, output_on: bool, measurement_condition: int) -> dict:
-        lockin = self.lockins[key]
-        values = self._query_sr830_numbers(key, "SNAP? 1,2,3,4,9", 5)
-        if self.lias_clear_pending.pop(key, False):
-            self._query_sr830_status(key)
-        status = self._query_sr830_status(key)
-        unreadable = status is None
-        if unreadable:
-            status = self.SR830_LIAS_UNREADABLE
-        sensitivity_used = self.sensitivity_indices[key]
-        auto_action = self._auto_range(key, values[2], 0x08 if unreadable else status)
-        reference_valid = not status & 8 and math.isclose(values[4], expected_frequency_hz, rel_tol=0.005, abs_tol=0.1)
-        in_compliance = bool(measurement_condition & 8)
-        return {
-            "lockin_key": key,
-            "X": values[0], "Y": values[1], "R": values[2],
-            "phase_deg": values[3], "reference_frequency_hz": values[4],
-            "lia_status": status,
-            "status_text": (
-                "LIAS? unreadable: counted as overloaded" if unreadable else self._status_text(status)
-            ),
-            "reference_valid": reference_valid, "output_on": output_on,
-            "measurement_condition": measurement_condition,
-            "in_compliance": in_compliance,
-            "measurement_valid": bool(
-                reference_valid
-                and not (status & 0x07)
-                and not in_compliance
-                and not auto_action
-            ),
-            "sensitivity_index": sensitivity_used, "auto_range": auto_action,
-        }
     def mfli_has_multi_demod(self) -> bool:
         with self.lock:
             options = str(self.mfli_props.get("options", "")).upper()
@@ -6229,52 +5825,6 @@ class NonLocalACController:
                 except BaseException:
                     has_demod_4 = False
             return bool(has_demod_4)
-    def update_amplitude(self, rms_ma: float) -> float:
-        with self.lock:
-            sweep_peak_a = getattr(self, "sweep_peak_a", None)
-            if self.source_output_mode != "AC" or sweep_peak_a is None:
-                raise RuntimeError("The 6221 is not set up for a continuous current sweep")
-            rms_ma = float(rms_ma)
-            if not math.isfinite(rms_ma) or rms_ma <= 0:
-                raise ValueError("6221 AC RMS current must be a finite positive number")
-            peak_a = math.sqrt(2.0) * rms_ma * 1e-3
-            if peak_a > sweep_peak_a * (1 + 1e-9):
-                raise ValueError("6221 current exceeds the range reserved for the sweep")
-            if int(self._query_float(self.source, "OUTP?")) != 1:
-                raise RuntimeError("6221 output is off; the current sweep cannot continue")
-            self._write_6221(f"SOUR:WAVE:AMPL {peak_a:.12e}")
-            actual = self._query_float(self.source, "SOUR:WAVE:AMPL?")
-            if not math.isclose(actual, peak_a, rel_tol=5e-4, abs_tol=1e-12):
-                raise RuntimeError(f"6221 live amplitude readback mismatch: {actual:g} Apeak")
-            if int(self._query_float(self.source, "OUTP?")) != 1:
-                raise RuntimeError("6221 output stopped during the amplitude update")
-            return actual / math.sqrt(2.0) * 1e3
-    def set_lockin_harmonic(self, key: str, harmonic: int, sensitivity_index: int | None=None) -> None:
-        harmonic = int(harmonic)
-        if not 1 <= harmonic <= 19999:
-            raise ValueError(f"SR830 #{key} harmonic must be within 1–19999")
-        sensitivity = 9 if sensitivity_index is None else int(sensitivity_index)
-        if not 0 <= sensitivity <= 26:
-            raise ValueError(f"SR830 #{key} sensitivity index must be within 0–26")
-        with self.lock:
-            if key not in self.lockins:
-                raise RuntimeError(f"SR830 #{key} is not connected")
-            self._write_sr830(key, f"HARM {harmonic}")
-            actual = int(self._query_sr830_numbers(key, "HARM?", 1)[0])
-            if actual != harmonic:
-                raise RuntimeError(f'SR830 #{key} harmonic readback mismatch: requested {harmonic}, readback {actual}')
-            self._write_sr830(key, f"SENS {sensitivity}")
-            self.sensitivity_indices[key] = int(self._query_sr830_numbers(key, "SENS?", 1)[0])
-            self.lias_clear_pending[key] = True
-            self.low_range_counts[key] = 0
-            self.range_cooldowns[key] = 0
-            floors = self.__dict__.setdefault("overload_floors", {})
-            memory = self.__dict__.setdefault("overload_floor_memory", {})
-            harmonics = self.__dict__.setdefault("lockin_harmonics", {})
-            if key in harmonics:
-                memory[(key, harmonics[key])] = int(floors.get(key) or 0)
-            floors[key] = 0 if sensitivity_index is None else int(memory.get((key, harmonic)) or 0)
-            harmonics[key] = harmonic
     def output_off(self) -> None:
         with self.lock:
             if self.source is None:
@@ -6288,16 +5838,6 @@ class NonLocalACController:
             self.output_enabled = False
             if errors:
                 raise RuntimeError("6221 failed to turn output off: " + "; ".join(errors))
-    def confirm_output_off(self, context: str) -> None:
-        with self.lock:
-            if self.source is None:
-                raise RuntimeError("6221 is not connected")
-            output_state = int(round(self._query_float(self.source, "OUTP?")))
-            if output_state != 0 or self.output_enabled:
-                self.output_off()
-                output_state = int(round(self._query_float(self.source, "OUTP?")))
-            if output_state != 0:
-                raise RuntimeError(f'6221 output is still ON {context}; the Non-local Keithley action is forbidden')
     def disconnect(self) -> None:
         with self.lock:
             source, manager = self.source, self.resource_manager
@@ -6428,29 +5968,6 @@ class NonLocalACController:
             release_instrument_lease(resource, self)
             self._close_manager_if_unused()
             self.logger(f"Non-local IV SR830 #{key} disconnected")
-    def disconnect_nanovoltmeter(self) -> None:
-        with self.lock:
-            meter = self.nanovoltmeter
-            resource = self.nanovoltmeter_resource
-            if meter is None:
-                self.nanovoltmeter_resource = ""
-                release_instrument_lease(resource, self)
-                self._close_manager_if_unused()
-                return
-            try:
-                meter.write("*CLS")
-            except BaseException:
-                pass
-            try:
-                meter.close()
-            except BaseException:
-                pass
-            self.nanovoltmeter = None
-            self.nanovoltmeter_identity = ""
-            self.nanovoltmeter_resource = ""
-            release_instrument_lease(resource, self)
-            self._close_manager_if_unused()
-            self.logger("Non-local IV Keithley 2182A disconnected")
     def disconnect_mfli(self) -> None:
         with self.lock:
             daq = self.mfli_daq
@@ -10988,16 +10505,6 @@ class CombinedControlApp:
                 image.save(handle, format="PNG", dpi=(900, 900))
             saved.append(destination)
         return tuple(saved)
-    def _save_stfmr_lockin_plot_snapshots(self, folder: Path, stamp: str) -> tuple[Path, ...]:
-        targets = (('X', self.stfmr_lockin_x_canvas), ('Y', self.stfmr_lockin_y_canvas), ('theta', self.stfmr_lockin_theta_canvas), ('field_vs_current', self.stfmr_lockin_canvas))
-        saved_paths: list[Path] = []
-        for suffix, canvas in targets:
-            if canvas is None:
-                raise RuntimeError(f"STFMR {suffix} plot window is not built yet; cannot save")
-            path = Path(folder) / f"STFMR_field_scan_{stamp}_{suffix}.png"
-            self.save_plot_canvas_snapshot(canvas, path)
-            saved_paths.append(path)
-        return tuple(saved_paths)
     def save_stfmr_lockin_results(self) -> None:
         if not self.stfmr_lockin_rows:
             return

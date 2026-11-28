@@ -76,63 +76,6 @@ class TwoPanelTests(unittest.TestCase):
             title = [c for c in canvas.create_text.call_args_list if c.kwargs.get('text') == 'Magnetic field (T)']
             self.assertEqual(title[0].args[1], height - 10)
 
-    def test_dual_harmonic_config_preserves_pll(self):
-        controller = app.NonLocalACController.__new__(app.NonLocalACController)
-        controller.lock = threading.RLock()
-        controller.mfli_config = dict(extref_demodulator=1, harmonic=1)
-        controller.mfli_bridge = None
-        controller.mfli_device = 'dev4414'
-        nodes = {}
-        controller.mfli_daq = Mock()
-        controller.mfli_daq.setInt.side_effect = lambda key, value: nodes.update({key: value})
-        controller.mfli_daq.getInt.side_effect = lambda key: nodes[key]
-        controller.configure_second_harmonic(.1)
-        self.assertEqual(nodes['/dev4414/demods/2/harmonic'], 2)
-        self.assertTrue(all('/demods/2/' in key for key in nodes))
-        controller.mfli_bridge = Mock()
-        controller.configure_second_harmonic(.1)
-        self.assertEqual(controller.mfli_bridge.request.call_args.args[0], 'configure_second_harmonic')
-        controller.mfli_config['extref_demodulator'] = 0
-        with self.assertRaises(RuntimeError):
-            controller.configure_second_harmonic(.1)
-
-    def test_third_harmonic_does_not_modify_reference(self):
-        controller = app.NonLocalACController.__new__(app.NonLocalACController)
-        controller.lock = threading.RLock()
-        controller.mfli_config = dict(extref_demodulator=1, harmonic=1)
-        controller.mfli_bridge = None
-        controller.mfli_device = 'dev4414'
-        nodes = {}
-        controller.mfli_daq = Mock()
-        controller.mfli_daq.setInt.side_effect = lambda key, value: nodes.update({key: value})
-        controller.mfli_daq.getInt.side_effect = lambda key: nodes[key]
-        controller.configure_third_harmonic(.1)
-        self.assertEqual(nodes['/dev4414/demods/3/harmonic'], 3)
-        self.assertTrue(all('/demods/3/' in key for key in nodes))
-        controller.mfli_daq.getInt.return_value = 0
-        controller.mfli_daq.getInt.side_effect = None
-        with self.assertRaises(RuntimeError):
-            controller.configure_third_harmonic(.1)
-        controller.mfli_bridge = Mock()
-        controller.configure_third_harmonic(.1)
-        self.assertEqual(controller.mfli_bridge.request.call_args.args[0], 'configure_third_harmonic')
-
-    def test_triple_demod_order_with_reference_on_four(self):
-        controller = app.NonLocalACController.__new__(app.NonLocalACController)
-        controller.lock = threading.RLock()
-        controller.mfli_config = dict(extref_demodulator=3, harmonic=1)
-        controller.mfli_bridge = None
-        controller.mfli_device = 'dev4414'
-        nodes = {}
-        controller.mfli_daq = Mock()
-        controller.mfli_daq.setInt.side_effect = lambda k, v: nodes.update({k: v})
-        controller.mfli_daq.getInt.side_effect = lambda k: nodes[k]
-        controller.configure_second_harmonic(.1)
-        controller.configure_third_harmonic(.1)
-        self.assertEqual(nodes['/dev4414/demods/1/harmonic'], 2)
-        self.assertEqual(nodes['/dev4414/demods/2/harmonic'], 3)
-        self.assertFalse(any('/demods/3/' in k for k in nodes))
-
     def make_panel(self):
         parent = app.CombinedControlApp.__new__(app.CombinedControlApp)
         parent.root = Mock()
@@ -164,55 +107,6 @@ class TwoPanelTests(unittest.TestCase):
             panel = app.PPMS2Panel(parent, Mock())
         panel.post_ui = lambda callback: callback()
         return parent, panel, controller
-
-    def test_four_demods_saved_independently_and_no_setting_writes(self):
-        controller = app.NonLocalACController(lambda message: None)
-        controller.mfli_props = {'options': 'MD'}      # four demodulators: MF-MD
-        controller.mfli_device = 'dev4414'
-        controller.mfli_daq = Mock()
-        def sample(node):
-            index = int(node.split('/')[3]) + 1
-            return {'x': [index * 1e-6], 'y': [-index * 2e-6], 'frequency': [index * 317.3], 'timestamp': [100 + index]}
-        controller.mfli_daq.getSample.side_effect = sample
-        controller.mfli_daq.getInt.side_effect = lambda node: 1
-        result = controller.read_mfli_four_demods()
-        self.assertEqual(len(result), 40)
-        for i in range(1, 5):
-            self.assertAlmostEqual(result[f'zurich_demod{i}_x_v'], i * 1e-6)
-            self.assertAlmostEqual(result[f'zurich_demod{i}_frequency_hz'], i * 317.3)
-        controller.mfli_daq.setInt.assert_not_called()
-        controller.mfli_daq.getInt.side_effect = lambda node: 0 if '/demods/2/enable' in node else 1
-        controller.mfli_daq.getSample.reset_mock()
-        disabled = controller.read_mfli_four_demods()
-        self.assertEqual(disabled.keys(), result.keys())
-        self.assertEqual(disabled['zurich_demod3_status'], 'disabled')
-        self.assertEqual(disabled['zurich_demod3_x_v'], '')
-        self.assertEqual(disabled['zurich_demod3_enabled'], 0)
-        self.assertEqual(controller.mfli_daq.getSample.call_count, 3)
-        self.assertEqual(disabled['zurich_demod4_x_v'], result['zurich_demod4_x_v'])
-        controller.mfli_daq.getSample.side_effect = RuntimeError('communication failed')
-        with self.assertRaisesRegex(RuntimeError, 'communication failed'):
-            controller.read_mfli_four_demods()
-
-    def test_legacy_bridge_skips_disabled_demod4_and_keeps_fixed_csv_columns(self):
-        block = app._MFLI_BRIDGE_SOURCE.split('        elif command == "read_demods":', 1)[1].split('        elif command == "autorange":', 1)[0]
-        daq, emit = Mock(), Mock()
-        daq.getInt.side_effect = lambda node: 0 if '/demods/3/enable' in node else 1
-        daq.getSample.return_value = dict(x=1e-6, y=2e-6, frequency=317.3, timestamp=42)
-        exec(textwrap.dedent(block), dict(daq=daq, device='dev4414', emit=emit, request={},
-            scalar=lambda sample, key, required=True: sample.get(key)))
-        channels = emit.call_args.args[0]['demods']
-        self.assertEqual(len(channels), 4)
-        self.assertEqual(channels[3], {'enabled': 0})
-        self.assertEqual(daq.getSample.call_count, 3)
-        controller = app.NonLocalACController(lambda _: None)
-        controller.mfli_bridge = Mock()
-        controller.mfli_bridge.request.return_value = {'demods': channels}
-        controller.mfli_props = {'options': 'MD'}      # four demodulators: MF-MD
-        row = controller.read_mfli_four_demods()
-        self.assertEqual(row['zurich_demod4_status'], 'disabled')
-        self.assertEqual(row['zurich_demod4_frequency_hz'], '')
-        self.assertEqual(row['zurich_demod1_x_v'], 1e-6)
 
     def test_reused_autorange_overload_low_signal_and_retry_limit(self):
         controller = app.NonLocalACController(lambda _: None)

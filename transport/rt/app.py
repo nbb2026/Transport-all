@@ -9687,6 +9687,8 @@ class RTEPanel(PPMSPanel):
         own = RTE_MEASUREMENT_START.get(self.__dict__.get('rte_measurement'), {}).get(key, {}).get(mode)
         if own:
             return str(own)
+        if mode == SWITCH_SCAN_MODE:
+            return f"{SWITCH_STATES_ACQUIRE_S if key == 'acquire_s' else SWITCH_STATES_SETTLE_S:g}"
         if key == 'acquire_s':
             return f'{RTE_FIELD_ACQUISITION_S if mode in RTE_FIELD_SWEEP_MODES else SWITCH_ACQUISITION_S if mode in SWITCH_MODES else RTE_ACQUISITION_S:g}'
         return f'{SWITCH_SETTLE_S if mode in SWITCH_6221_MODES else RTE_SETTLE_S:g}'
@@ -12197,6 +12199,8 @@ SWITCH_STATES_MAX = 12
 SWITCH_STATE_COLUMNS = ("Angle \u00b0", "Field G", "Pulse mA", "Pulse \u00b5s")
 SWITCH_DEFAULT_STATES = (("0", "500", "20", "1000"), ("0", "500", "-20", "1000"), ("90", "500", "20", "1000"), ("90", "500", "-20", "1000"))
 SWITCH_STATE_READ_FIELD_G = 0.0
+SWITCH_STATES_SETTLE_S = 10.0
+SWITCH_STATES_ACQUIRE_S = 10.0
 def rte_switch_states(rows, count):
     # The first `count` rows of the table as states: number, stage angle (None: an empty box), field, pulse
     # current and pulse width.  The angles are typed for every state or for none.

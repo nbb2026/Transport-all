@@ -101,8 +101,8 @@ Scan box (user, 2026-11-27):
   current 0.5 mA RMS, SR830-1 on the 1st harmonic. The read current and the
   SR830-1 harmonic go back to 1.5 mA and 2 in the other tabs; a box keeps a
   value that was typed into it. The 10 s, 10 s and 500 G are this tab's
-  Switch-loop scan's: its Switch and Switch2 scans keep 30 s. The safety tick
-  is never set by the program.
+  Switch-loop scan's: its Switch2 scan keeps 30 s, and the Switch scan has its
+  own 10 s (below). The safety tick is never set by the program.
 - **AHE** opens as the user's third figure of 2026-11-27: the Field scan from
   -3 to 3 A in 0.1 A steps and back, 1 loop, Settle s 0.5, Acquire s 2, read
   current 0.5 mA RMS, SR830-1 on the 1st harmonic and the only lock-in
@@ -126,6 +126,8 @@ Scan box (user, 2026-11-27):
   | 3 | 90 | 500 | 20 | 1000 |
   | 4 | 90 | 500 | -20 | 1000 |
 
+  - **Settle s and Acquire s** start at 10 s in the Switch scan, on both
+    Switch tabs (user, 2026-11-28); a typed value stays.
   - **States** sets how many rows the scan has (1 to 12; a row past the first
     four is empty until it is typed). The states run in their order, and
     **Cycles** repeats the whole list.

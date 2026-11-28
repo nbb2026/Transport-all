@@ -211,6 +211,8 @@ SOURCE_REPLACE = (
          "        own = RTE_MEASUREMENT_START.get(self.__dict__.get('rte_measurement'), {}).get(key, {}).get(mode)\n"
          '        if own:\n'
          '            return str(own)\n'
+         '        if mode == SWITCH_SCAN_MODE:\n'
+         '            return f"{SWITCH_STATES_ACQUIRE_S if key == \'acquire_s\' else SWITCH_STATES_SETTLE_S:g}"\n'
          "        if key == 'acquire_s':\n"
          "            return f'{RTE_FIELD_ACQUISITION_S if mode in RTE_FIELD_SWEEP_MODES else SWITCH_ACQUISITION_S if mode in SWITCH_MODES else RTE_ACQUISITION_S:g}'\n"
          "        return f'{SWITCH_SETTLE_S if mode in SWITCH_6221_MODES else RTE_SETTLE_S:g}'\n"
@@ -743,6 +745,10 @@ SWITCH_STATE_COLUMNS = ("Angle \u00b0", "Field G", "Pulse mA", "Pulse \u00b5s")
 SWITCH_DEFAULT_STATES = (("0", "500", "20", "1000"), ("0", "500", "-20", "1000"), ("90", "500", "20", "1000"), ("90", "500", "-20", "1000"))
 # The field every state is read at, and the stage turns at (user's choice: "At 0 G, as MS-fourState").
 SWITCH_STATE_READ_FIELD_G = 0.0
+# Settle s and Acquire s of the Switch scan, on every tab (user, 2026-11-28: "settle 10s aqcuire 10s default"); the
+# Switch-loop and Switch2 scans keep theirs.  A typed value stays, as for the other scans.
+SWITCH_STATES_SETTLE_S = 10.0
+SWITCH_STATES_ACQUIRE_S = 10.0
 
 
 def rte_pulse_axis(mode):

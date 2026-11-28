@@ -384,9 +384,10 @@ class ThePage(unittest.TestCase):
             panel.rte_set_measurement(name)
             self.assertEqual(panel.ppms_simple_mode.get(), "Switch-loop", name)
             self.assertEqual(three(), expected, name)
-        # The other scans of the Switch-OOP tab keep their 30 s, and Switch-loop chosen again shows 10 s.
+        # The Switch scan shows its own 10 s on every tab (user, 2026-11-28: "settle 10s aqcuire 10s default"),
+        # Switch2 keeps its times, and Switch-loop chosen again shows this tab's 10 s.
         panel.rte_set_measurement("Switch-OOP")
-        for scan, times in (("Switch", ("30", "30")), ("Switch2", ("0.5", "30")), ("Switch-loop", ("10", "10"))):
+        for scan, times in (("Switch", ("10", "10")), ("Switch2", ("0.5", "30")), ("Switch-loop", ("10", "10"))):
             panel.ppms_simple_mode.set(scan)
             panel._rte_mode_changed()
             self.assertEqual(three()[:2], times, scan)

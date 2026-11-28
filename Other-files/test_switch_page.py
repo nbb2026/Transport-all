@@ -340,11 +340,11 @@ class SwitchPageTests(unittest.TestCase):
                 panel.rte_states_count.set(typed)
                 panel._rte_show_state_rows()
                 self.assertEqual([{w.grid_removed for w in row} for row in panel.rte_state_rows], [{False}] * shown + [{True}] * (12 - shown), typed)
-            # Acquire s starts at 30 s in Switch (user, 2026-11-23: "set the
-            # default acquire time in switch as 30s").
-            self.assertEqual(panel.ppms_acquisition_time_var.get(), "30")
+            # Settle s and Acquire s start at 10 s in Switch (user, 2026-11-28:
+            # "settle 10s aqcuire 10s default"; 30 s each before).
+            self.assertEqual(panel.ppms_acquisition_time_var.get(), "10")
             self.assertIs(panel.rte_round_trip.get(), False)
-            self.assertEqual((str(panel.ppms_field_scan_loop_var.get()), panel.ppms_field_scan_stable_var.get()), ("1", "30"))
+            self.assertEqual((str(panel.ppms_field_scan_loop_var.get()), panel.ppms_field_scan_stable_var.get()), ("1", "10"))
             # Cycles in Round trip's place (user, 2026-11-24: "change the
             # round trip setting to cycle times and text input in the switch
             # scan mode"): the Loops count, so the Loops box is off screen.

@@ -727,7 +727,8 @@ RTE_SCAN_BOX_FIRST = True
 # PHE (user's figure, 2026-11-27: "default setting as the figure for PHE module"): Angle+Field 0 to -360 in 5,
 # 0.5 s settle, 5 s acquire, 1.5 mA were the scan's already; its own are one outer field of 200 G (angle_field_g:
 # the Angle+Field list box, by the same typed-value rule; SHHV shows the list 200 to 1000 G) and SR830-1 on the
-# 1st harmonic.
+# 1st harmonic.  Since 2026-11-28 (user's figure: "PHE default use these parameters pls."): outer field 1000 G and
+# Acquire s 2 on Angle+Field (acquire_s: what a scan's Acquire s shows in this tab); Angle+Current keeps 5 s.
 # Switch-IP (user, 2026-11-27: "add a Switch-IP module which use 14mA to -14mA step 2mA as default and SR830-1
 # use harmonic 2 pls. pulse width default 30us. the other settings are the same as Switch-OOP"): the tab after
 # Switch-OOP, with its scans, Switch-loop, 200 G and 0.5 mA; its own are the loop 14 to -14 mA in 2 mA
@@ -743,7 +744,7 @@ RTE_SCAN_BOX_FIRST = True
 # the tab only while it holds what the program put there, and the other tabs show SWITCH_DEFAULT_STATES).  Settle s
 # 10, Acquire s 10, Cycles 1 and Pulses 1 were the scan's already.  The tab's Switch-loop values stay as they were.
 RTE_MEASUREMENT_START = {
-    "PHE": dict(scan="Angle+Field", harmonic_a="1", angle_field_g="200"),
+    "PHE": dict(scan="Angle+Field", harmonic_a="1", angle_field_g="1000", acquire_s={"Angle+Field": "2"}),
     "AHE": dict(scan="Field", current_ma="0.5", harmonic_a="1", ranges={"Field": ("-3", "3", "0.1")}),
     "Switch-OOP": dict(scan="Switch", current_ma="0.5", harmonic_a="1", ranges={"Switch-loop": ("24", "-24", "2")},
                        settle_s={"Switch-loop": "10"}, acquire_s={"Switch-loop": "10"}, loop_field_g="500",

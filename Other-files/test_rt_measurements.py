@@ -230,15 +230,16 @@ class ThePage(unittest.TestCase):
 
     def test_the_phe_tab_starts_as_the_users_figure(self):
         """User's figure, 2026-11-27 ("default setting as the figure for PHE
-        module"): Angle+Field 0 to -360 in 5, 1 loop, Settle s 0.5, Acquire s
-        5, no round trip, Outer field G 200; 1.5 mA RMS at 317.3 Hz, 100 V;
-        SR830-1 on the 1st harmonic and the only one measured."""
+        module"): Angle+Field 0 to -360 in 5, 1 loop, Settle s 0.5, no round
+        trip; 1.5 mA RMS at 317.3 Hz, 100 V; SR830-1 on the 1st harmonic and
+        the only one measured.  Figure of 2026-11-28 ("PHE default use these
+        parameters pls."): Acquire s 2 (was 5), Outer field G 1000 (was 200)."""
         panel = self.page()
         panel.rte_set_measurement("PHE")
         self.assertEqual((panel.ppms_simple_mode.get(), [v.get() for v in panel.ppms_simple_range], str(panel.ppms_field_scan_loop_var.get()),
                           panel.ppms_field_scan_stable_var.get(), panel.ppms_acquisition_time_var.get(), panel.rte_round_trip.get(),
                           panel.rte_outer_ranges["Angle+Field"][0].get()),
-                         ("Angle+Field", ["0", "-360", "5"], "1", "0.5", "5", False, "200"))
+                         ("Angle+Field", ["0", "-360", "5"], "1", "0.5", "2", False, "1000"))
         self.assertEqual((panel.ppms_transport_current_var.get(), panel.ppms_transport_frequency_var.get(),
                           panel.ppms_transport_compliance_var.get()), ("1.5", "317.3", "100"))
         self.assertEqual((panel.ppms_transport_harmonic_a_var.get(), panel.ppms_transport_harmonic_b_var.get(),
@@ -248,7 +249,18 @@ class ThePage(unittest.TestCase):
         self.assertEqual((panel.rte_pulse_current_ma.get(), panel.rte_pulse_width_us.get(), panel.rte_pulse_count.get()), ("10", "1000", "1"))
         self.assertFalse(panel.ppms_control_safety_var.get())
         # One field: one turn of 73 angles.
-        self.assertEqual(list(app.rte_outer_list_plan(panel.rte_outer_ranges["Angle+Field"][0].get())), [200.0])
+        self.assertEqual(list(app.rte_outer_list_plan(panel.rte_outer_ranges["Angle+Field"][0].get())), [1000.0])
+        # The figure shows Angle+Field: Angle+Current keeps the page's 5 s, and a typed time stays.
+        panel.ppms_simple_mode.set("Angle+Current")
+        panel._rte_mode_changed()
+        self.assertEqual(panel.ppms_acquisition_time_var.get(), f"{app.RTE_ACQUISITION_S:g}")
+        panel.ppms_simple_mode.set("Angle+Field")
+        panel._rte_mode_changed()
+        self.assertEqual(panel.ppms_acquisition_time_var.get(), "2")
+        panel.ppms_acquisition_time_var.set("3")
+        panel.rte_set_measurement("SHHV")
+        panel.rte_set_measurement("PHE")
+        self.assertEqual(panel.ppms_acquisition_time_var.get(), "3")
 
     def test_phes_field_and_harmonic_go_back_with_shhv_and_a_typed_one_stays(self):
         fields = app.RTE_OUTER_ROWS["Angle+Field"]["defaults"][0]
@@ -256,9 +268,9 @@ class ThePage(unittest.TestCase):
         box = panel.rte_outer_ranges["Angle+Field"][0]
         self.assertEqual((box.get(), panel.ppms_transport_harmonic_a_var.get()), (fields, "2"))
         panel.rte_set_measurement("PHE")
-        self.assertEqual((box.get(), panel.ppms_transport_harmonic_a_var.get()), ("200", "1"))
+        self.assertEqual((box.get(), panel.ppms_transport_harmonic_a_var.get(), panel.ppms_acquisition_time_var.get()), ("1000", "1", "2"))
         panel.rte_set_measurement("SHHV")
-        self.assertEqual((box.get(), panel.ppms_transport_harmonic_a_var.get()), (fields, "2"))
+        self.assertEqual((box.get(), panel.ppms_transport_harmonic_a_var.get(), panel.ppms_acquisition_time_var.get()), (fields, "2", f"{app.RTE_ACQUISITION_S:g}"))
         # Typed in PHE: kept in SHHV, and on the way back.
         panel.rte_set_measurement("PHE")
         box.set("350, 700")

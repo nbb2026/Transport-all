@@ -161,12 +161,13 @@ Scan box (user, 2026-11-27):
     run's settings list the states under `pulse.states`.
   - In a wide Scan box the table stands beside the scan's rows; in a narrow
     one it is in the first row, beside the scan list.
-- **PHE** opens as the user's second figure of 2026-11-27: Angle+Field from 0
-  to -360° in 5° steps, 1 loop, Settle s 0.5, Acquire s 5, no round trip,
-  outer field 200 G (one field), read current 1.5 mA RMS, SR830-1 on the 1st
-  harmonic and the only lock-in measured. Only the outer field and the
-  harmonic differ from SHHV, which shows the field list 200 to 1000 G and
-  harmonic 2; a typed value stays here too.
+- **PHE** opens as the user's figure of 2026-11-28: Angle+Field from 0
+  to -360° in 5° steps, 1 loop, Settle s 0.5, Acquire s 2, no round trip,
+  outer field 1000 G (one field), read current 1.5 mA RMS, SR830-1 on the 1st
+  harmonic and the only lock-in measured (until 2026-11-28: Acquire s 5 and
+  200 G). The outer field, Acquire s and the harmonic differ from SHHV, which
+  shows the field list 200 to 1000 G, 5 s and harmonic 2; a typed value stays
+  here too. Angle+Current on this tab keeps Acquire s 5.
 - A measurement comes back on the scan it was left on. A scan that is also in
   the new measurement (Angle+Field in PHE and SHHV) keeps what was typed.
 - While a scan runs, or the page is busy, the measurement cannot be changed:

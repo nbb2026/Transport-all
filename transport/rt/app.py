@@ -1870,7 +1870,7 @@ RTE_MEASUREMENTS = {
     "Switch-IP": ("Switch", "Switch-loop", "Switch2"),
 }
 RTE_MEASUREMENT_START = {
-    "PHE": dict(scan="Angle+Field", harmonic_a="1", angle_field_g="200"),
+    "PHE": dict(scan="Angle+Field", harmonic_a="1", angle_field_g="1000", acquire_s={"Angle+Field": "2"}),
     "AHE": dict(scan="Field", current_ma="0.5", harmonic_a="1", ranges={"Field": ("-3", "3", "0.1")}),
     "Switch-OOP": dict(scan="Switch", current_ma="0.5", harmonic_a="1", ranges={"Switch-loop": ("24", "-24", "2")},
                        settle_s={"Switch-loop": "10"}, acquire_s={"Switch-loop": "10"}, loop_field_g="500",

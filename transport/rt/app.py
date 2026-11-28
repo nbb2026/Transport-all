@@ -9364,9 +9364,9 @@ class RTEPanel(PPMSPanel):
                 pulse_under = {str(widget): options for widget, options in zip(self.rte_pulse_widgets, self.rte_pulse_under_options)}
                 widths, spans = [0] * 7, []
                 for widget in scan_rows.grid_slaves():
-                    if (not outer_row and str(widget) in under) or widget is note_label:
+                    if (not outer_row and str(widget) in under) or widget is note_label or widget is self.__dict__.get('rte_states_frame'):
                         continue
-                    info = pulse_under.get(str(widget)) or under.get(str(widget)) or (self.rte_states_under if widget is self.__dict__.get('rte_states_frame') else None) or widget.grid_info()
+                    info = pulse_under.get(str(widget)) or under.get(str(widget)) or widget.grid_info()
                     column, span = int(info['column']), int(info.get('columnspan', 1))
                     need = widget.winfo_reqwidth() + grid_padx(info)
                     if span == 1:
@@ -9377,8 +9377,10 @@ class RTEPanel(PPMSPanel):
                     short = need - sum(widths[column:column + span])
                     if short > 0:
                         widths[min(column + span, 7) - 1] += short
+                base = sum(widths)
+                widths[6] += max(0, self._rte_states_under_px() - sum(widths[1:]))
                 if outer_row:
-                    self.rte_scan_rows_columns = widths
+                    self.rte_scan_rows_columns, self.rte_scan_rows_base = widths, base
                 return sum(widths)
             def scan_stacked_width():
                 return self._pair_inset(scan) + max(scan_rows_width(), scan_status.winfo_reqwidth(), scan_notes.winfo_reqwidth(), note_label.winfo_reqwidth())
@@ -9719,13 +9721,13 @@ class RTEPanel(PPMSPanel):
             widgets = [ttk.Label(frame, text=str(number))]
             widgets[0].grid(row=number, column=0, sticky='e', padx=(0, 6))
             for column, variable in enumerate(variables, 1):
-                entry = ttk.Entry(frame, textvariable=variable, width=7)
+                entry = ttk.Entry(frame, textvariable=variable, width=6)
                 entry.grid(row=number, column=column, padx=2, pady=1)
                 self.rte_edit_widgets.append((entry, 'normal'))
                 widgets.append(entry)
             self.rte_state_rows.append(widgets)
         self.rte_states_under = dict(row=0, column=1, columnspan=RTE_SCAN_ROWS_LAST_COLUMN, rowspan=1, sticky='w', padx=(4, 2))
-        self.rte_states_beside = dict(row=0, column=RTE_SCAN_ROWS_LAST_COLUMN + 1, columnspan=2, rowspan=5, sticky='n', padx=(12, 2))
+        self.rte_states_beside = dict(row=0, column=7, columnspan=RTE_SCAN_ROWS_LAST_COLUMN - 6, rowspan=5, sticky='nw', padx=(16, 2))
         frame.grid(**self.rte_states_under)
         frame.grid_remove()
         self.rte_states_frame, self.rte_states_scan_box, self.rte_states_place = frame, scan, 'under'
@@ -9761,20 +9763,22 @@ class RTEPanel(PPMSPanel):
             combo.grid(row=0, column=0, sticky='n' if mode == SWITCH_SCAN_MODE else '')
         self._rte_hide_state_parts()
         self._rte_arrange_states()
-    def _rte_states_beside_px(self) -> int:
+    def _rte_states_under_px(self) -> int:
         frame = self.__dict__.get('rte_states_frame')
         try:
-            return frame.winfo_reqwidth() + 14 if frame is not None and self.__dict__.get('rte_states_place') == 'beside' and frame.winfo_manager() == 'grid' else 0
+            return frame.winfo_reqwidth() + 6 if frame is not None and frame.winfo_manager() == 'grid' else 0
         except (tk.TclError, AttributeError):
             return 0
+    def _rte_states_beside_px(self) -> int:
+        return 10 ** 6 if self.__dict__.get('rte_states_place') == 'beside' and self._rte_states_under_px() else 0
     def _rte_arrange_states(self, _event=None):
         state = self.__dict__
         frame, scan = state.get('rte_states_frame'), state.get('rte_states_scan_box')
         try:
             if frame is None or scan is None or frame.winfo_manager() != 'grid':
                 return
-            room, rows_width = scan.winfo_width() - self._pair_inset(scan), sum(state.get('rte_scan_rows_columns') or ())
-            place = 'beside' if room > 1 and rows_width > 0 and room >= rows_width + frame.winfo_reqwidth() + 14 else 'under'
+            room, rows_width = scan.winfo_width() - self._pair_inset(scan), state.get('rte_scan_rows_base') or 0
+            place = 'beside' if room > 1 and rows_width > 0 and room >= rows_width + frame.winfo_reqwidth() + 22 else 'under'
             if state.get('rte_states_place') == place:
                 return
             guard, window_width = state.setdefault('rte_states_guard', {}), scan.winfo_toplevel().winfo_width()

@@ -488,6 +488,9 @@ class SHHVConnectionColumnsTests(unittest.TestCase):
                         print(f"Switch states table at {self.root.winfo_width()} px, {count} states: {panel.rte_states_place}, "
                               f"{right - left}x{bottom - top} px in a Scan box of {scan.winfo_width()}x{scan.winfo_height()} px; "
                               f"pulse row {panel.__dict__.get('rte_pulse_place')}, note {panel.__dict__.get('rte_note_place')}")
+                        if scan.winfo_width() >= 1040:
+                            self.assertEqual(panel.rte_states_place, "beside", "beside the scan's rows where the Scan box has the room")
+                            self.assertGreater(left, panel.rte_start_button.winfo_rootx() + panel.rte_start_button.winfo_width())
                         s_left, s_top, s_right, s_bottom = box(scan)
                         self.assertTrue(s_left <= left and right <= s_right and s_top <= top and bottom <= s_bottom, (box(frame), box(scan)))
                         for other in rows.grid_slaves():

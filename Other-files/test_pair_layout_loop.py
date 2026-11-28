@@ -411,7 +411,7 @@ class RTEStageBlockTests(Built, unittest.TestCase):
                     self.root.update()
                 shown = [c for c in (*panel.ppms_harmonic_canvases.values(), *panel.rte_time_canvases.values()) if c.winfo_ismapped()]
                 print(f"SHHV {mode} plots at {self.root.winfo_width()}x{self.root.winfo_height()} px: "
-                      f"{sorted(c.winfo_height() for c in shown)} px tall; pulse row {panel.rte_pulse_place}, note {panel.rte_note_place}")
+                      f"{sorted(c.winfo_height() for c in shown)} px tall; pulse row {panel.__dict__.get('rte_pulse_place', 'under')}, note {panel.__dict__.get('rte_note_place', 'under')}")
                 with self.subTest(mode=mode):
                     self.assertEqual(len(shown), 4, "X, Y and X, Y vs time")
                     # Switch has its states' table beside the rows there since 2026-11-28, and the pulse row and

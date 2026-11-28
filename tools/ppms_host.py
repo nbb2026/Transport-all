@@ -64,8 +64,18 @@ EXTRA_IMPORTS = (
 )
 # Literal text of the generated module to replace.  Its own taskbar identity,
 # so it does not group under the main program's button when both are open.
+# How runs are saved in this program (user, 2026-11-28: "standardize the file-saving logic across all parts of the
+# code and ensure that the file and variable naming conventions are consistent", for RT, then "do the same for PPMS,
+# MOKE and FMR"): a run's folder, live CSV and log are the recorder's alone; a copy saved by hand is suggested under
+# the run's own name, <stem>_copy.csv, in the run folder; the program log is named after this program.  The names of
+# the files a scan makes, of the CSV's columns and of the log's fields are as they were: the analysis scripts read them.
+SOURCE_REPLACE = (
+    ('            initialfile=time.strftime("PPMS_field_scan_%Y%m%d_%H%M%S.csv"),\n',
+     '            initialfile=f"{Path(folder).name}_copy.csv" if where else time.strftime("PPMS_field_scan_%Y%m%d_%H%M%S.csv"),\n'),
+)
 REPLACE = {
     "'NH.ProfChen.MagnetoElectroOpticalMicrowaveTransport'": "'NH.ProfChen.TransportPPMS'",
+    '"Transport_log_%Y%m%d_%H%M%S.txt"': '"Transport_PPMS_log_%Y%m%d_%H%M%S.txt"',
 }
 
 MAIN_WINDOW_TITLE = "Transport_PPMS_NH"
@@ -74,6 +84,14 @@ APPLICATION_ICON_BASENAME = "Transport_PPMS"
 
 
 class CombinedControlApp:
+    def _ppms_append_row(self, row) -> None:
+        # One writer of a run's CSV: its recorder.  (The main program falls back to an older writer with a path
+        # of its own when no run is open; this program always has one, so that second writer is not in it.)
+        recorder = self.__dict__.get("ppms_run_recorder")
+        if recorder is None:
+            raise RuntimeError("No run is open; the point was not saved and the scan stopped")
+        recorder.append_row(row)
+
     def build_ui(self) -> None:
         self.root.rowconfigure(0, weight=1)
         self.root.columnconfigure(0, weight=1)

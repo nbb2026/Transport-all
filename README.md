@@ -146,6 +146,21 @@ To bring a later change of the main program's PPMS page here, run the tool
 again on the new `Transport_all.py`, then the tests. Do not edit `app.py` by
 hand: change the two steering files.
 
+## What the program saves, and under which names
+
+One rule since 2026-11-28 (the same on the four programs):
+
+- A scan's run is `<folder>/<name>/` (`<name>_01`, ... when taken) with
+  `<name>.csv` (one row per point), `<name>.log` (JSON lines) and
+  `<name>_plots_snapshot.png`; a blank name is `PPMS_<date>_<time>`. The run's
+  recorder is the only writer of the CSV and the log (the main program's
+  second writer, used when no run is open, is not in this program).
+- Save CSV as suggests `<name>_copy.csv` in the run folder.
+- The program log is suggested as `Transport_PPMS_log_<date>_<time>.txt`.
+- `PPMS_He_history.csv`, beside the program, and a macro's `.seq` file are not
+  a run's files and are as they were.
+- The names of the CSV's columns and of the log's fields are unchanged.
+
 ## Tests
 
 Offline only; no instrument, port or VISA session is opened.

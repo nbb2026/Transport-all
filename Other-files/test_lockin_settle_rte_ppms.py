@@ -301,7 +301,7 @@ class PPMSWorkerTests(NoWindows):
         obj._ppms_publish_motor_readback = lambda data: None
         obj.post_ui = lambda callback: None
         obj.thread_log = mock.Mock()
-        obj._append_ppms_live_csv = lambda row: None
+        obj._ppms_append_row = lambda row: None
         obj._configure_ppms_transport_scan = lambda config: log.append(("configure",))
         obj._update_ppms_transport_current = lambda config: log.append(("amplitude", config["current_rms_ma"]))
         obj._stop_ppms_transport_source = lambda **_options: log.append(("off",))

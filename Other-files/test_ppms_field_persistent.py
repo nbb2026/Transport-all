@@ -410,7 +410,7 @@ class FieldScanFromPersistentTests(unittest.TestCase):
         panel._configure_ppms_transport_scan = lambda settings: None
         panel._stop_ppms_transport_source = Mock()
         panel._read_ppms_live = remote.read_environment
-        panel._append_ppms_live_csv = lambda row: None
+        panel._ppms_append_row = lambda row: None
 
         def acquire(*args):
             clock.now += 1.

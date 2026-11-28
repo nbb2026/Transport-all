@@ -292,8 +292,9 @@ class Rig:
         page.ppms_field_scan_started_at = self.clock.now
         self.folder = tempfile.TemporaryDirectory()
         test.addCleanup(self.folder.cleanup)
-        page.ppms_live_csv_path = Path(self.folder.name) / "scan.csv"
-        page.ppms_live_csv_fields = None
+        # A row is saved through the run's recorder, the one writer since 2026-11-28.
+        page.ppms_run_recorder = app.ScanRunRecorder(Path(self.folder.name), "PPMS", "scan")
+        self.csv_path = page.ppms_run_recorder.csv_path
         active = tuple(self.sr830)
         settings = app.validate_ppms_transport_scan_settings(
             currents[0], (frequencies or (317.3,))[0], 50.0, 1, 2, active, allow_no_lockins=zurich, harmonic_c=3)
@@ -317,11 +318,11 @@ class Rig:
             self.page._ppms_scan_with_final_field([(1, 1, 1, 1234.0)], 100.0, 0.0, 1, settings)
 
     def rows(self):
-        with self.page.ppms_live_csv_path.open(encoding="utf-8-sig", newline="") as handle:
+        with self.csv_path.open(encoding="utf-8-sig", newline="") as handle:
             return list(csv.DictReader(handle))
 
     def header(self):
-        with self.page.ppms_live_csv_path.open(encoding="utf-8-sig", newline="") as handle:
+        with self.csv_path.open(encoding="utf-8-sig", newline="") as handle:
             return next(csv.reader(handle))
 
     def index(self, entry, start=0):
@@ -735,8 +736,8 @@ class SequenceTests(unittest.TestCase):
             if command == "OUTP OFF" and source.frequency == 2.0 and len(rig.rows_seen) == 1:
                 source.output = 1
         rig.rows_seen = []
-        append = rig.page._append_ppms_live_csv
-        rig.page._append_ppms_live_csv = lambda row: (append(row), rig.rows_seen.append(row))
+        append = rig.page._ppms_append_row
+        rig.page._ppms_append_row = lambda row: (append(row), rig.rows_seen.append(row))
         source.on_write = stuck
         with self.assertRaisesRegex(RuntimeError, r"6221 output still ON \(OUTP\?=1\) before setting up 3 Hz"):
             rig.run()

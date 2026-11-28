@@ -242,18 +242,24 @@ class ModeTests(unittest.TestCase):
             self.assertEqual(obj.ppms_field_scan_total, len(expected))
             self.assertEqual([p[1] for p in sequence], list(range(1, len(expected)+1)))
 
-    def test_live_csv_appends_rows_with_one_header(self):
+    def test_a_row_is_saved_by_the_runs_recorder_and_by_nothing_else(self):
+        """User, 2026-11-28: "standardize the file-saving logic across all parts of the code".  The main program
+        writes a row itself, to a path of its own, when no run is open; here a run is always open, so the
+        recorder is the one writer and that second one is not in the program."""
         obj = app.CombinedControlApp.__new__(app.CombinedControlApp)
+        with self.assertRaisesRegex(RuntimeError, "No run is open; the point was not saved"):
+            obj._ppms_append_row(dict(field=1, x=2))
+        self.assertFalse(hasattr(app.CombinedControlApp, "_append_ppms_live_csv"))
         with tempfile.TemporaryDirectory() as folder:
-            obj.ppms_live_csv_path = Path(folder) / "scan.csv"
-            obj.ppms_live_csv_fields = None
-            obj._append_ppms_live_csv(dict(field=1, x=2))
-            obj._append_ppms_live_csv(dict(field=3, x=4))
-            before = obj.ppms_live_csv_path.read_bytes()
-            with self.assertRaisesRegex(RuntimeError, "channels changed"):
-                obj._append_ppms_live_csv(dict(field=5, y=6))
-            self.assertEqual(obj.ppms_live_csv_path.read_bytes(), before)
-            with obj.ppms_live_csv_path.open(encoding="utf-8-sig") as handle:
+            obj.ppms_run_recorder = recorder = app.ScanRunRecorder(Path(folder), "PPMS", "scan")
+            obj._ppms_append_row(dict(field=1, x=2))
+            obj._ppms_append_row(dict(field=3, x=4))
+            before = recorder.csv_path.read_bytes()
+            with self.assertRaisesRegex(ValueError, "no column for y"):
+                obj._ppms_append_row(dict(field=5, y=6))
+            self.assertEqual(recorder.csv_path.read_bytes(), before)
+            self.assertEqual((recorder.csv_path, recorder.rows_written), (Path(folder) / "scan" / "scan.csv", 2))
+            with recorder.csv_path.open(encoding="utf-8-sig") as handle:
                 self.assertEqual(list(csv.DictReader(handle)), [dict(field="1", x="2"), dict(field="3", x="4")])
 
 

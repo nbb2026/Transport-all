@@ -100,7 +100,7 @@ class RTE(unittest.TestCase):
         panel._acquire_ppms_first_point = Mock(return_value=(dict(sample), 2))
         panel._average_ppms_transport_sample = Mock(return_value=dict(sample))
         panel.post_ui = Mock()
-        panel._append_ppms_live_csv = Mock()
+        panel._ppms_append_row = Mock()
         panel._rte_wait = lambda seconds: (
             (_ for _ in ()).throw(app.PPMSScanCancelled('stop'))
             if panel.ppms_field_scan_stop_event.is_set() else None)

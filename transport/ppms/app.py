@@ -8511,11 +8511,12 @@ class CombinedControlApp:
         if recorder is not None:
             recorder.check()
     def _ppms_append_row(self, row) -> None:
+        # One writer of a run's CSV: its recorder.  (The main program falls back to an older writer with a path
+        # of its own when no run is open; this program always has one, so that second writer is not in it.)
         recorder = self.__dict__.get("ppms_run_recorder")
         if recorder is None:
-            self._append_ppms_live_csv(row)
-        else:
-            recorder.append_row(row)
+            raise RuntimeError("No run is open; the point was not saved and the scan stopped")
+        recorder.append_row(row)
     def _ppms_close_run(self, outcome, **details) -> list[str]:
         recorder = self.__dict__.get("ppms_run_recorder")
         self.ppms_run_recorder = None
@@ -9278,22 +9279,6 @@ class CombinedControlApp:
         mode = getattr(self, "ppms_active_scan_mode", "")
         self.ppms_field_scan_status_var.set(f'Stopping the {mode} scan; completed CSV points kept; the 6221 is zeroed next; temperature, field and angle kept…')
         self.ppms_field_scan_stop_button.configure(state="disabled")
-    def _append_ppms_live_csv(self, row):
-        path = getattr(self, "ppms_live_csv_path", None)
-        if path is None:
-            raise RuntimeError("No live CSV file selected; acquisition stopped")
-        first = self.ppms_live_csv_fields is None
-        fields = list(row) if first else self.ppms_live_csv_fields
-        if set(row) != set(fields):
-            raise RuntimeError("Live CSV channels changed; appending stopped to avoid misaligned columns")
-        with path.open("a", newline="", encoding="utf-8-sig") as handle:
-            writer = csv.DictWriter(handle, fieldnames=fields)
-            if first:
-                writer.writeheader()
-            writer.writerow(row)
-            handle.flush()
-            os.fsync(handle.fileno())
-        self.ppms_live_csv_fields = fields
     def save_ppms_field_scan_csv(self) -> None:
         if not self.ppms_field_scan_rows:
             return
@@ -9304,7 +9289,7 @@ class CombinedControlApp:
             title="Save PPMS scan CSV as",
             defaultextension=".csv",
             filetypes=(("CSV", "*.csv"),),
-            initialfile=time.strftime("PPMS_field_scan_%Y%m%d_%H%M%S.csv"),
+            initialfile=f"{Path(folder).name}_copy.csv" if where else time.strftime("PPMS_field_scan_%Y%m%d_%H%M%S.csv"),
             **where,
         )
         if not selected:
@@ -9632,7 +9617,7 @@ class CombinedControlApp:
     def save_communication_log(self) -> None:
         path = filedialog.asksaveasfilename(
             parent=self.root, title="Save the full program log (including lines buffered while paused)",
-            initialfile=time.strftime("Transport_log_%Y%m%d_%H%M%S.txt"),
+            initialfile=time.strftime("Transport_PPMS_log_%Y%m%d_%H%M%S.txt"),
             defaultextension=".txt", filetypes=(("Text", "*.txt"),))
         if not path:
             return

@@ -521,10 +521,9 @@ class CsvTests(NoWindows):
                         harmonic_a=1, harmonic_b=2, harmonic_c=3, acquisition_s=1.0,
                         frequency_hz=317.3, current_rms_ma=1.0, compliance_v=50.0)
         with tempfile.TemporaryDirectory() as folder:
-            obj.ppms_live_csv_path = Path(folder) / "scan.csv"
-            obj.ppms_live_csv_fields = None
+            obj.ppms_run_recorder = recorder = app.ScanRunRecorder(Path(folder), "PPMS", "scan")
             app.CombinedControlApp._ppms_field_scan_worker(obj, [(1, 1, 1, 300.0)], 100.0, 0.0, 1, settings)
-            with obj.ppms_live_csv_path.open(encoding="utf-8-sig", newline="") as handle:
+            with recorder.csv_path.open(encoding="utf-8-sig", newline="") as handle:
                 reader = csv.reader(handle)
                 return next(reader), next(reader)
 

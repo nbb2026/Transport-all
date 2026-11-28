@@ -1872,7 +1872,8 @@ RTE_MEASUREMENTS = {
 RTE_MEASUREMENT_START = {
     "PHE": dict(scan="Angle+Field", harmonic_a="1", angle_field_g="200"),
     "AHE": dict(scan="Field", current_ma="0.5", harmonic_a="1", ranges={"Field": ("-3", "3", "0.1")}),
-    "Switch-OOP": dict(scan="Switch-loop", current_ma="0.5", harmonic_a="1"),
+    "Switch-OOP": dict(scan="Switch-loop", current_ma="0.5", harmonic_a="1", ranges={"Switch-loop": ("24", "-24", "2")},
+                       settle_s={"Switch-loop": "10"}, acquire_s={"Switch-loop": "10"}, loop_field_g="500"),
     "Switch-IP": dict(scan="Switch-loop", current_ma="0.5", harmonic_a="2", ranges={"Switch-loop": ("14", "-14", "2")}, pulse_width_us="30"),
 }
 RTE_DEFAULT_MEASUREMENT = "SHHV"
@@ -9631,11 +9632,13 @@ class RTEPanel(PPMSPanel):
         if scan != self.ppms_simple_mode.get():
             self.ppms_simple_mode.set(scan)
             self._rte_mode_changed()
-        elif scan == SWITCH_LOOP_SCAN_MODE:
-            old, new = (tuple(RTE_MEASUREMENT_START.get(n, {}).get('ranges', {}).get(scan) or SWITCH_LOOP_DEFAULT_RANGE) for n in (was, name))
-            if old != new and tuple(str(v.get()).strip() for v in self.ppms_simple_range) == old:
-                for variable, value in zip(self.ppms_simple_range, new):
-                    variable.set(value)
+        else:
+            if scan == SWITCH_LOOP_SCAN_MODE:
+                old, new = (tuple(RTE_MEASUREMENT_START.get(n, {}).get('ranges', {}).get(scan) or SWITCH_LOOP_DEFAULT_RANGE) for n in (was, name))
+                if old != new and tuple(str(v.get()).strip() for v in self.ppms_simple_range) == old:
+                    for variable, value in zip(self.ppms_simple_range, new):
+                        variable.set(value)
+            self._rte_follow_scan_times(scan)
         frame = state.get('ppms_plot_frame')
         if frame is not None:
             frame.configure(text=f'{name}: {RTE_PLOT_TITLE_TAIL}')
@@ -9645,7 +9648,8 @@ class RTEPanel(PPMSPanel):
         state = self.__dict__
         shown = state.setdefault('rte_measurement_shown', {})
         fields = (state.get('rte_outer_ranges') or {}).get('Angle+Field') or [None]
-        for key, variable, base in (('current_ma', state.get('ppms_transport_current_var'), f'{RTE_TRANSPORT_CURRENT_RMS_MA:g}'), ('harmonic_a', state.get('ppms_transport_harmonic_a_var'), '2'), ('pulse_width_us', state.get('rte_pulse_width_us'), f'{SWITCH_DEFAULT_PULSE_WIDTH_US:g}'), ('angle_field_g', fields[0], RTE_OUTER_ROWS['Angle+Field']['defaults'][0])):
+        loop_fields = (state.get('rte_outer_ranges') or {}).get(SWITCH_LOOP_SCAN_MODE) or [None]
+        for key, variable, base in (('current_ma', state.get('ppms_transport_current_var'), f'{RTE_TRANSPORT_CURRENT_RMS_MA:g}'), ('harmonic_a', state.get('ppms_transport_harmonic_a_var'), '2'), ('pulse_width_us', state.get('rte_pulse_width_us'), f'{SWITCH_DEFAULT_PULSE_WIDTH_US:g}'), ('angle_field_g', fields[0], RTE_OUTER_ROWS['Angle+Field']['defaults'][0]), ('loop_field_g', loop_fields[0], RTE_OUTER_ROWS[SWITCH_LOOP_SCAN_MODE]['defaults'][0])):
             new, was = str(start.get(key, base)), shown.get(key, base)
             if variable is None or new == was or str(variable.get()).strip() != was:
                 continue
@@ -9653,6 +9657,27 @@ class RTEPanel(PPMSPanel):
             shown[key] = new
             if key == 'harmonic_a':
                 self._ppms_apply_selected_harmonic('830_a')
+    def _rte_scan_time_default(self, key, mode) -> str:
+        own = RTE_MEASUREMENT_START.get(self.__dict__.get('rte_measurement'), {}).get(key, {}).get(mode)
+        if own:
+            return str(own)
+        if key == 'acquire_s':
+            return f'{RTE_FIELD_ACQUISITION_S if mode in RTE_FIELD_SWEEP_MODES else SWITCH_ACQUISITION_S if mode in SWITCH_MODES else RTE_ACQUISITION_S:g}'
+        return f'{SWITCH_SETTLE_S if mode in SWITCH_6221_MODES else RTE_SETTLE_S:g}'
+    def _rte_follow_scan_times(self, mode):
+        acquire = self.__dict__.get('ppms_acquisition_time_var')
+        if acquire is not None:
+            shown = self.__dict__.get('rte_acquisition_default_shown')
+            new = self._rte_scan_time_default('acquire_s', mode)
+            if shown is None or str(acquire.get()).strip() == shown:
+                acquire.set(new)
+                self.rte_acquisition_default_shown = new
+        settle = self.__dict__.get('ppms_field_scan_stable_var')
+        if settle is not None and 'rte_settle_default_shown' in self.__dict__:
+            new = self._rte_scan_time_default('settle_s', mode)
+            if str(settle.get()).strip() == self.rte_settle_default_shown:
+                settle.set(new)
+                self.rte_settle_default_shown = new
     def _rte_mode_changed(self, _event=None):
         mode = self.ppms_simple_mode.get()
         current = mode == 'Current'
@@ -9662,19 +9687,7 @@ class RTEPanel(PPMSPanel):
         defaults = ('0.01', '1', '0.01') if current else RTE_ANGLE_DEFAULT_RANGE if angle else (RTE_MEASUREMENT_START.get(self.__dict__.get('rte_measurement'), {}).get('ranges', {}).get(mode) or SWITCH_LOOP_DEFAULT_RANGE) if mode == SWITCH_LOOP_SCAN_MODE else () if switch else (RTE_MEASUREMENT_START.get(self.__dict__.get('rte_measurement'), {}).get('ranges', {}).get(mode) or RTE_FIELD_DEFAULT_RANGE)
         for variable, value in zip(self.ppms_simple_range, defaults):
             variable.set(value)
-        acquire = self.__dict__.get('ppms_acquisition_time_var')
-        if acquire is not None:
-            shown = self.__dict__.get('rte_acquisition_default_shown')
-            new = f'{RTE_FIELD_ACQUISITION_S if mode in RTE_FIELD_SWEEP_MODES else SWITCH_ACQUISITION_S if switch else RTE_ACQUISITION_S:g}'
-            if shown is None or str(acquire.get()).strip() == shown:
-                acquire.set(new)
-                self.rte_acquisition_default_shown = new
-        settle = self.__dict__.get('ppms_field_scan_stable_var')
-        if settle is not None and 'rte_settle_default_shown' in self.__dict__:
-            new = f'{SWITCH_SETTLE_S if mode in SWITCH_6221_MODES else RTE_SETTLE_S:g}'
-            if str(settle.get()).strip() == self.rte_settle_default_shown:
-                settle.set(new)
-                self.rte_settle_default_shown = new
+        self._rte_follow_scan_times(mode)
         self._rte_show_scan_units(mode)
         self._rte_show_pulse_row(mode)
         self._rte_show_outer_row(mode)

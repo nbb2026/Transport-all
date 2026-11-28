@@ -83,12 +83,14 @@ Scan box (user, 2026-11-27):
 - They are one page: the instruments stay connected, and the settings stay as
   they are, when another measurement's tab is chosen. Only the list of scans
   and the plots' title follow the measurement. The program starts on SHHV.
-- **Switch-OOP** opens as the user's figure of 2026-11-27: Switch-loop from 22
-  to -22 mA in 2 mA steps and back, 1 loop, Settle s 30, Acquire s 30, outer
-  field 200 G, 1000 µs pulses, read current 0.5 mA RMS, SR830-1 on the 1st
-  harmonic. The read current and the SR830-1 harmonic go back to 1.5 mA and
-  2 in the other tabs; either box keeps a value that was typed into it. The
-  safety tick is never set by the program.
+- **Switch-OOP** opens as the user's figure of 2026-11-28: Switch-loop from 24
+  to -24 mA in 2 mA steps and back, 1 loop, Settle s 10, Acquire s 10, outer
+  field 500 G; and, from the figure of 2026-11-27, 1000 µs pulses, read
+  current 0.5 mA RMS, SR830-1 on the 1st harmonic. The read current and the
+  SR830-1 harmonic go back to 1.5 mA and 2 in the other tabs; a box keeps a
+  value that was typed into it. The 10 s, 10 s and 500 G are this tab's
+  Switch-loop scan's: its Switch and Switch2 scans keep 30 s. The safety tick
+  is never set by the program.
 - **AHE** opens as the user's third figure of 2026-11-27: the Field scan from
   -3 to 3 A in 0.1 A steps and back, 1 loop, Settle s 0.5, Acquire s 2, read
   current 0.5 mA RMS, SR830-1 on the 1st harmonic and the only lock-in
@@ -96,10 +98,11 @@ Scan box (user, 2026-11-27):
   -1 to 1 A in 0.02 A.
 - **Switch-IP** is Switch-OOP with three values of its own: Switch-loop from
   14 to -14 mA in 2 mA steps and back, 30 µs pulses, SR830-1 on the 2nd
-  harmonic. The rest is Switch-OOP's (200 G, 0.5 mA RMS read current, Settle s
-  30, Acquire s 30). Between the two tabs the loop, the pulse width and the
-  harmonic follow the tab; a typed value stays. Pulse µs shows 1000 in the
-  other tabs.
+  harmonic. It keeps what Switch-OOP had on 2026-11-27 for the rest (200 G,
+  Settle s 30, Acquire s 30, 0.5 mA RMS read current): the figure of
+  2026-11-28 was for Switch-OOP. Between the two tabs the loop, Settle s,
+  Acquire s, the field, the pulse width and the harmonic follow the tab; a
+  typed value stays. Pulse µs shows 1000 in the other tabs.
 - **PHE** opens as the user's second figure of 2026-11-27: Angle+Field from 0
   to -360° in 5° steps, 1 loop, Settle s 0.5, Acquire s 5, no round trip,
   outer field 200 G (one field), read current 1.5 mA RMS, SR830-1 on the 1st

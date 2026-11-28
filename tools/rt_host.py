@@ -165,11 +165,13 @@ SOURCE_REPLACE = (
          '        if scan != self.ppms_simple_mode.get():\n'
          '            self.ppms_simple_mode.set(scan)\n'
          '            self._rte_mode_changed()\n'
-         '        elif scan == SWITCH_LOOP_SCAN_MODE:\n'
-         "            old, new = (tuple(RTE_MEASUREMENT_START.get(n, {}).get('ranges', {}).get(scan) or SWITCH_LOOP_DEFAULT_RANGE) for n in (was, name))\n"
-         '            if old != new and tuple(str(v.get()).strip() for v in self.ppms_simple_range) == old:\n'
-         '                for variable, value in zip(self.ppms_simple_range, new):\n'
-         '                    variable.set(value)\n'
+         '        else:\n'
+         '            if scan == SWITCH_LOOP_SCAN_MODE:\n'
+         "                old, new = (tuple(RTE_MEASUREMENT_START.get(n, {}).get('ranges', {}).get(scan) or SWITCH_LOOP_DEFAULT_RANGE) for n in (was, name))\n"
+         '                if old != new and tuple(str(v.get()).strip() for v in self.ppms_simple_range) == old:\n'
+         '                    for variable, value in zip(self.ppms_simple_range, new):\n'
+         '                        variable.set(value)\n'
+         '            self._rte_follow_scan_times(scan)\n'
          "        frame = state.get('ppms_plot_frame')\n"
          '        if frame is not None:\n'
          "            frame.configure(text=f'{name}: {RTE_PLOT_TITLE_TAIL}')\n"
@@ -179,7 +181,8 @@ SOURCE_REPLACE = (
          '        state = self.__dict__\n'
          "        shown = state.setdefault('rte_measurement_shown', {})\n"
          "        fields = (state.get('rte_outer_ranges') or {}).get('Angle+Field') or [None]\n"
-         "        for key, variable, base in (('current_ma', state.get('ppms_transport_current_var'), f'{RTE_TRANSPORT_CURRENT_RMS_MA:g}'), ('harmonic_a', state.get('ppms_transport_harmonic_a_var'), '2'), ('pulse_width_us', state.get('rte_pulse_width_us'), f'{SWITCH_DEFAULT_PULSE_WIDTH_US:g}'), ('angle_field_g', fields[0], RTE_OUTER_ROWS['Angle+Field']['defaults'][0])):\n"
+         "        loop_fields = (state.get('rte_outer_ranges') or {}).get(SWITCH_LOOP_SCAN_MODE) or [None]\n"
+         "        for key, variable, base in (('current_ma', state.get('ppms_transport_current_var'), f'{RTE_TRANSPORT_CURRENT_RMS_MA:g}'), ('harmonic_a', state.get('ppms_transport_harmonic_a_var'), '2'), ('pulse_width_us', state.get('rte_pulse_width_us'), f'{SWITCH_DEFAULT_PULSE_WIDTH_US:g}'), ('angle_field_g', fields[0], RTE_OUTER_ROWS['Angle+Field']['defaults'][0]), ('loop_field_g', loop_fields[0], RTE_OUTER_ROWS[SWITCH_LOOP_SCAN_MODE]['defaults'][0])):\n"
          '            new, was = str(start.get(key, base)), shown.get(key, base)\n'
          '            if variable is None or new == was or str(variable.get()).strip() != was:\n'
          '                continue\n'
@@ -187,6 +190,27 @@ SOURCE_REPLACE = (
          '            shown[key] = new\n'
          "            if key == 'harmonic_a':\n"
          "                self._ppms_apply_selected_harmonic('830_a')\n"
+         '    def _rte_scan_time_default(self, key, mode) -> str:\n'
+         "        own = RTE_MEASUREMENT_START.get(self.__dict__.get('rte_measurement'), {}).get(key, {}).get(mode)\n"
+         '        if own:\n'
+         '            return str(own)\n'
+         "        if key == 'acquire_s':\n"
+         "            return f'{RTE_FIELD_ACQUISITION_S if mode in RTE_FIELD_SWEEP_MODES else SWITCH_ACQUISITION_S if mode in SWITCH_MODES else RTE_ACQUISITION_S:g}'\n"
+         "        return f'{SWITCH_SETTLE_S if mode in SWITCH_6221_MODES else RTE_SETTLE_S:g}'\n"
+         '    def _rte_follow_scan_times(self, mode):\n'
+         "        acquire = self.__dict__.get('ppms_acquisition_time_var')\n"
+         '        if acquire is not None:\n'
+         "            shown = self.__dict__.get('rte_acquisition_default_shown')\n"
+         "            new = self._rte_scan_time_default('acquire_s', mode)\n"
+         '            if shown is None or str(acquire.get()).strip() == shown:\n'
+         '                acquire.set(new)\n'
+         '                self.rte_acquisition_default_shown = new\n'
+         "        settle = self.__dict__.get('ppms_field_scan_stable_var')\n"
+         "        if settle is not None and 'rte_settle_default_shown' in self.__dict__:\n"
+         "            new = self._rte_scan_time_default('settle_s', mode)\n"
+         '            if str(settle.get()).strip() == self.rte_settle_default_shown:\n'
+         '                settle.set(new)\n'
+         '                self.rte_settle_default_shown = new\n'
          '    def _rte_mode_changed(self, _event=None):\n'
      )),
     ('                row = dict(module=self.ppms_page_name, scan_mode=mode, loop=loop, point=point,\n',
@@ -287,6 +311,25 @@ SOURCE_REPLACE = (
      "                    stage_box.grid_configure(in_=body, row=1, column=0, columnspan=2 if one_row else 1, sticky='nw', padx=0, pady=(4, 0))\n"),
     ("RTE_ANGLE_DEFAULT_RANGE if angle else SWITCH_LOOP_DEFAULT_RANGE if mode == SWITCH_LOOP_SCAN_MODE else () if switch else RTE_FIELD_DEFAULT_RANGE",
      "RTE_ANGLE_DEFAULT_RANGE if angle else (RTE_MEASUREMENT_START.get(self.__dict__.get('rte_measurement'), {}).get('ranges', {}).get(mode) or SWITCH_LOOP_DEFAULT_RANGE) if mode == SWITCH_LOOP_SCAN_MODE else () if switch else (RTE_MEASUREMENT_START.get(self.__dict__.get('rte_measurement'), {}).get('ranges', {}).get(mode) or RTE_FIELD_DEFAULT_RANGE)"),
+    # Settle s and Acquire s of a scan may be the measurement's own (settle_s, acquire_s in RTE_MEASUREMENT_START):
+    # the page's two blocks, word for word, are _rte_follow_scan_times above, which also runs when the tab changes
+    # and the scan stays.
+    ((
+        "        acquire = self.__dict__.get('ppms_acquisition_time_var')\n"
+        '        if acquire is not None:\n'
+        "            shown = self.__dict__.get('rte_acquisition_default_shown')\n"
+        "            new = f'{RTE_FIELD_ACQUISITION_S if mode in RTE_FIELD_SWEEP_MODES else SWITCH_ACQUISITION_S if switch else RTE_ACQUISITION_S:g}'\n"
+        '            if shown is None or str(acquire.get()).strip() == shown:\n'
+        '                acquire.set(new)\n'
+        '                self.rte_acquisition_default_shown = new\n'
+        "        settle = self.__dict__.get('ppms_field_scan_stable_var')\n"
+        "        if settle is not None and 'rte_settle_default_shown' in self.__dict__:\n"
+        "            new = f'{SWITCH_SETTLE_S if mode in SWITCH_6221_MODES else RTE_SETTLE_S:g}'\n"
+        '            if str(settle.get()).strip() == self.rte_settle_default_shown:\n'
+        '                settle.set(new)\n'
+        '                self.rte_settle_default_shown = new\n'
+    ),
+     '        self._rte_follow_scan_times(mode)\n'),
     ("        stem = typed or time.strftime(f'{self.ppms_page_name}_%Y%m%d_%H%M%S')\n",
      "        stem = typed or time.strftime(f\"{self.__dict__.get('rte_measurement') or self.ppms_page_name}_%Y%m%d_%H%M%S\")\n"),
     ("initialfile=time.strftime(f'{self.ppms_page_name}_%Y%m%d_%H%M%S.csv'),",
@@ -316,6 +359,11 @@ RTE_SCAN_BOX_FIRST = True
 # Switch-loop from 22 to -22 mA in 2 mA steps and back, at 200 G, 1000 us pulses, a 0.5 mA RMS read current
 # and SR830-1 on the 1st harmonic.  Loops 1, Settle s 30, Acquire s 30, Round trip, Pulses 1 and Compliance V
 # 100 were the Switch-loop scan's already.  The safety tick stays the user's to make.
+# Since 2026-11-28 (user's figure: "default use this settings in RT-Switch-OOP"): Switch-loop from 24 to -24 mA in
+# 2 mA, Settle s 10, Acquire s 10 and an outer field of 500 G; Loops 1 and Round trip as before.  These are this
+# tab's Switch-loop scan's (ranges, settle_s, acquire_s: per scan; loop_field_g: the Switch-loop Outer field G box),
+# by the typed-value rule below.  The request names Switch-OOP, so Switch-IP keeps Settle s 30, Acquire s 30 and
+# 200 G, and the Switch and Switch2 scans keep theirs.
 # The scan a measurement opens on the first time, and the read current and SR830-1 harmonic shown while it is
 # chosen: these two boxes follow the measurement only while they still hold what the program put there, so a
 # typed value stays (the rule of Acquire s); the other measurements show 1.5 mA and harmonic 2 as before.
@@ -335,7 +383,8 @@ RTE_SCAN_BOX_FIRST = True
 RTE_MEASUREMENT_START = {
     "PHE": dict(scan="Angle+Field", harmonic_a="1", angle_field_g="200"),
     "AHE": dict(scan="Field", current_ma="0.5", harmonic_a="1", ranges={"Field": ("-3", "3", "0.1")}),
-    "Switch-OOP": dict(scan="Switch-loop", current_ma="0.5", harmonic_a="1"),
+    "Switch-OOP": dict(scan="Switch-loop", current_ma="0.5", harmonic_a="1", ranges={"Switch-loop": ("24", "-24", "2")},
+                       settle_s={"Switch-loop": "10"}, acquire_s={"Switch-loop": "10"}, loop_field_g="500"),
     "Switch-IP": dict(scan="Switch-loop", current_ma="0.5", harmonic_a="2", ranges={"Switch-loop": ("14", "-14", "2")}, pulse_width_us="30"),
 }
 SWITCH_LOOP_DEFAULT_RANGE = ("22", "-22", "2")

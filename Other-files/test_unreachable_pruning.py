@@ -320,7 +320,8 @@ class RuleTests(unittest.TestCase):
                 return Path(sys.argv[0]), isinstance(1, Holder)
         """)
         ast.parse(text)
-        self.assertIn("import os, sys", text)            # "import x" may be wanted for its effect: it stays
+        self.assertIn("import sys\n", text)
+        self.assertNotIn("os", text.split("class")[0])
         self.assertIn("from pathlib import Path\n", text)
         self.assertIn("    pass", text)
 
@@ -439,6 +440,7 @@ class ReviewCaseTests(unittest.TestCase):
     def test_module_level_statements_that_act_on_something_else_stay(self):
         text = pruned("""
             import os, sys
+            import statistics
             import encodings.idna
             from math import *
             DEFAULT = 5
@@ -454,6 +456,7 @@ class ReviewCaseTests(unittest.TestCase):
             def main():
                 return 0
         """)
+        self.assertNotIn("statistics", text)           # a whole module nothing names goes; "import x.y" may be for its effect
         for piece in ("import os, sys", "import encodings.idna", "from math import *", "sys.tracebacklimit = 7", 'os.environ["X"] = "1"',
                       "DEFAULT = 5", "BOX.limit: int = DEFAULT", "def exported"):
             self.assertIn(piece, text)

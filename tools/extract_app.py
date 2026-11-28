@@ -691,9 +691,10 @@ def prune_unreachable(text: str, roots, details=None) -> tuple[str, list[str]]:
             report.append(f"{node.end_lineno - first + 1:5d}  {label}")
     for node in tree.body:
         if isinstance(node, (ast.Import, ast.ImportFrom)):
-            if isinstance(node, ast.Import) or node.module == "__future__" or any(alias.name == "*" for alias in node.names):
-                continue                  # only names of "from x import a, b" go: "import x.y" may be wanted for its effect
-            wanted = [alias for alias in node.names if (alias.asname or alias.name).split(".")[0] in names]
+            if isinstance(node, ast.ImportFrom) and (node.module == "__future__" or any(alias.name == "*" for alias in node.names)):
+                continue
+            # "import x.y" stays, used or not: it may be wanted for its effect (it loads the submodule).
+            wanted = [alias for alias in node.names if (alias.asname or alias.name).split(".")[0] in names or (isinstance(node, ast.Import) and "." in alias.name)]
             if len(wanted) < len(node.names):
                 node.names = wanted
                 cut(node, "", [ast.unparse(node)] if wanted else [])

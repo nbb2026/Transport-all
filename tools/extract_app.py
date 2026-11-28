@@ -613,6 +613,10 @@ def prune_unreachable(text: str, roots, details=None) -> tuple[str, list[str]]:
     def kind(node):
         return {item.id for item in node.decorator_list if isinstance(item, ast.Name)} & {"staticmethod", "classmethod"}
 
+    def other_decorators(node):
+        return [item for item in node.decorator_list if not ((isinstance(item, ast.Name) and item.id in PLAIN_DECORATORS) or (
+            isinstance(item, ast.Attribute) and item.attr in ("setter", "getter", "deleter")))]
+
     def state():
         return len(names), len(made), len(anything), len(reached), len(pending), len(kept_top)
 
@@ -628,6 +632,11 @@ def prune_unreachable(text: str, roots, details=None) -> tuple[str, list[str]]:
                     first = [*node.args.posonlyargs, *node.args.args][:1]
                     scans[id(node)] = scan(node, first[0].arg if first and "staticmethod" not in kind(node) else None)
                 absorb(scans[id(node)], for_class, owner, "classmethod" in kind(node))
+                # Its decorators and default values run in the class body, where a method is a plain name.
+                for part in (*other_decorators(node), *node.args.defaults, *filter(None, node.args.kw_defaults)):
+                    for sub in ast.walk(part):
+                        if isinstance(sub, ast.Name) and (owner, sub.id) in methods:
+                            reach(owner, owner, sub.id)
         for name in list(names):
             for node in top.get(name, ()):
                 if id(node) in kept_top:
@@ -643,14 +652,10 @@ def prune_unreachable(text: str, roots, details=None) -> tuple[str, list[str]]:
                     names.update(sub.id for sub in ast.walk(item) if isinstance(sub, ast.Name))
                 for item in node.body:            # what runs when the class itself is made
                     if isinstance(item, FUNCTIONS):
-                        plain = [extra for extra in item.decorator_list if (isinstance(extra, ast.Name) and extra.id in PLAIN_DECORATORS) or (
-                            isinstance(extra, ast.Attribute) and extra.attr in ("setter", "getter", "deleter"))]
-                        if len(plain) < len(item.decorator_list):
+                        if other_decorators(item):
                             reach(node.name, node.name, item.name)
-                        found = scan(ast.Module(body=[ast.Expr(extra) for extra in (
-                            *(extra for extra in item.decorator_list if extra not in plain), *item.args.defaults, *filter(None, item.args.kw_defaults))], type_ignores=[]))
-                    else:
-                        found = scan(item)
+                        continue
+                    found = scan(item)
                     absorb(found)
                     for sub in found[0]:
                         if (node.name, sub) in methods:

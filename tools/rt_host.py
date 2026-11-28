@@ -194,6 +194,12 @@ SOURCE_REPLACE = (
          '            shown[key] = new\n'
          "            if key == 'harmonic_a':\n"
          "                self._ppms_apply_selected_harmonic('830_a')\n"
+         "        own, base = str(start.get('pulse_width_us', f'{SWITCH_DEFAULT_PULSE_WIDTH_US:g}')), f'{SWITCH_DEFAULT_PULSE_WIDTH_US:g}'\n"
+         "        for number, variables in enumerate(state.get('rte_state_vars') or (), 1):\n"
+         "            was = shown.get(f'state_{number}_width_us', base)\n"
+         '            if own != was and str(variables[3].get()).strip() == was:\n'
+         '                variables[3].set(own)\n'
+         "                shown[f'state_{number}_width_us'] = own\n"
          '    def _rte_run_name(self) -> str:\n'
          "        return self.__dict__.get('rte_measurement') or self.ppms_page_name\n"
          '    def _append_ppms_live_csv(self, row):\n'
@@ -386,6 +392,282 @@ SOURCE_REPLACE = (
      "initialfile=f'{Path(folder).name}_copy.csv' if where else time.strftime(f\"{self.ppms_field_scan_rows[0].get('measurement') or self.ppms_page_name}_%Y%m%d_%H%M%S.csv\"),"),
     ("f'{self.ppms_page_name} CSV export'",
      "f\"{self.ppms_field_scan_rows[0].get('measurement') or self.ppms_page_name}: CSV export\""),
+    # The Switch scan runs states (user, 2026-11-28: "change the switch scan mode to set the state 1, 2, 3, 4... like
+    # MS_four state? the each state can contain settings like stage angle, field, pulse mA, pulse us, the readout
+    # current remains the value in the setting"; then chosen from three questions: a table with one row a state,
+    # every state read at 0 G as MS-fourState reads, the states in their order times Cycles).
+    # - The Scan box shows a table in place of "Pulses mA", "Outer field G" and the Pulse us box: States (how many
+    #   rows), and Angle, Field G, Pulse mA, Pulse us for each state.
+    # - One state: the read current off; the stage to the state's angle (at the read field, 0 G); the field to the
+    #   state's; the pulse; the field back to 0 G; the read current on again, the settling and the read.  The read
+    #   current, its frequency, the compliance and the number of pulses a write are the Settings boxes', as before.
+    # - The Angle boxes are filled for every state or for none: with none the stage is not moved and need not be
+    #   connected, as in the Switch scan before.
+    # - In the scan's own terms the read field is its one "outer" field, so the start, the end and the files of a
+    #   Switch scan are the page's as they were.  Switch-loop and Switch2 are not changed.
+    ("        self.rte_edit_widgets.append((pulses, 'normal'))\n",
+     "        self.rte_edit_widgets.append((pulses, 'normal'))\n        self._rte_build_states_table(scan, scan_rows)\n"),
+    ('        self._rte_show_avtech_row()\n        if not self.ppms_field_scan_rows:\n',
+     '        self._rte_show_avtech_row()\n        self._rte_show_states(mode)\n        if not self.ppms_field_scan_rows:\n'),
+    ("            note.set(RTE_SCAN_NOTES.get(mode, RTE_SCAN_NOTES['Current']).replace('KEPCO', name))\n",
+     "            note.set(RTE_SCAN_NOTES.get(mode, RTE_SCAN_NOTES['Current']).replace('KEPCO', name))\n        self._rte_hide_state_parts()\n"),
+    ('                    for widget, options in zip(pulse_widgets, pulse_beside if pulse else self.rte_pulse_under_options):\n                        widget.grid_configure(**options)\n',
+     '                    for widget, options in zip(pulse_widgets, pulse_beside if pulse else self.rte_pulse_under_options):\n                        widget.grid_configure(**options)\n                    self._rte_hide_state_parts()\n'),
+    ("    SWITCH_SCAN_MODE: 'Switch: 6221 pulse mA; outer: field G',\n",
+     "    SWITCH_SCAN_MODE: 'Switch: states x Cycles; read at 0 G',\n"),
+    ('            turns = mode in RTE_STAGE_MODES\n',
+     "            turns = mode in RTE_STAGE_MODES or (mode == SWITCH_SCAN_MODE and self._rte_switch_states_typed()[0]['angle_deg'] is not None)\n"),
+    ('else rte_pulse_list(self.rte_switch_pulses_var.get()) if mode == SWITCH_SCAN_MODE else None)\n',
+     "else tuple(state['pulse_ma'] for state in self._rte_switch_states_typed()) if mode == SWITCH_SCAN_MODE else None)\n"),
+    ('                                 self.ppms_field_scan_loop_var.get(), self.rte_round_trip.get(),\n',
+     '                                 self.ppms_field_scan_loop_var.get(), self.rte_round_trip.get() and mode != SWITCH_SCAN_MODE,\n'),
+    ("                kind = 'a Field+Angle scan' if field_angle else 'an angle scan'\n",
+     "                kind = 'a Field+Angle scan' if field_angle else 'the angles of the states (or empty every Angle ° box: the stage is then not moved)' if switch else 'an angle scan'\n"),
+    ('                outer = rte_outer_list_plan(self.rte_outer_ranges[mode][0].get())\n                for value in outer:\n',
+     '                outer = (SWITCH_STATE_READ_FIELD_G,) if mode == SWITCH_SCAN_MODE else rte_outer_list_plan(self.rte_outer_ranges[mode][0].get())\n                for value in outer:\n'),
+    ('self._rte_switch_pulse_settings(plan, settings) if switch else None\n',
+     '(self._rte_states_pulse_settings(settings) if mode == SWITCH_SCAN_MODE else self._rte_switch_pulse_settings(plan, settings)) if switch else None\n'),
+    ('        if outer and angle:\n            angles = [target for _loop, _point, target in plan] * (len(outer) * len(passes))\n',
+     "        if switch and pulse.get('states'):\n            least_s += self._rte_states_least_extra_s(pulse, plan, passes)\n        if outer and angle:\n            angles = [target for _loop, _point, target in plan] * (len(outer) * len(passes))\n"),
+    ("                    order='read current off, pulse, read current on again, settle, read',\n                    read_settle_s=switch_settle_s, read_settle_time_constants=SWITCH_READ_SETTLE_TAUS)\n",
+     "                    order='read current off, pulse, read current on again, settle, read',\n                    read_settle_s=switch_settle_s, read_settle_time_constants=SWITCH_READ_SETTLE_TAUS)\n                if pulse.get('states'):\n                    self._rte_states_run_settings(run_settings, pulse)\n"),
+    ("            self.ppms_plot_x_range = (min((p[2] for p in plan)), max((p[2] for p in plan))) if switch or mode == 'Current' else None\n",
+     "            self.ppms_plot_x_range = (0.5, len(pulse['states']) + 0.5) if switch and pulse.get('states') else (min((p[2] for p in plan)), max((p[2] for p in plan))) if switch or mode == 'Current' else None\n"),
+    ("            elif switch:\n                self.ppms_field_scan_status_var.set(f'{self.ppms_page_name} {mode}: {len(outer)} fields x {len(plan)} pulses; {self.ppms_field_scan_total} points')\n",
+     "            elif switch and pulse.get('states'):\n                self.rte_stage_where = 'stage not moved'\n                self.ppms_field_scan_status_var.set(f\"{self.ppms_page_name} {mode}: {len(pulse['states'])} states x {len(plan) // len(pulse['states'])} cycle(s); {self.ppms_field_scan_total} points\")\n            elif switch:\n                self.ppms_field_scan_status_var.set(f'{self.ppms_page_name} {mode}: {len(outer)} fields x {len(plan)} pulses; {self.ppms_field_scan_total} points')\n"),
+    ("                               if outer and angle else\n                               f'; fields as typed: {rte_outer_values_text(outer, 50)} (± '\n",
+     "                               if outer and angle else\n                               self._rte_states_log_text(pulse, plan, settings) if switch and pulse.get('states') else\n                               f'; fields as typed: {rte_outer_values_text(outer, 50)} (± '\n"),
+    ("        if pulse.get('source') == 'Avtech':\n            return self._rte_switch2_question(plan, outer, passes, limit, pulse, settings, settle_text, least_text, ramp_text)\n",
+     "        if pulse.get('states'):\n            return self._rte_states_question(plan, passes, limit, pulse, settings, settle_text, least_text, ramp_text)\n        if pulse.get('source') == 'Avtech':\n            return self._rte_switch2_question(plan, outer, passes, limit, pulse, settings, settle_text, least_text, ramp_text)\n"),
+    ('                    pulse_columns = self._rte_avtech_pulse(target, pulse) if avtech else self._rte_switch_pulse(target, pulse)\n',
+     (
+         "                    if pulse.get('states'):\n"
+         '                        try:\n'
+         '                            pulse_columns = self._rte_state_write(supply, limit, pulse, point, target, progress)\n'
+         '                        except PPMSScanCancelled:\n'
+         '                            raise\n'
+         '                        except Exception as state_error:\n'
+         "                            stage_failure, field_failure = (getattr(state_error, 'rte_state_part', '') == part for part in ('stage', 'field'))\n"
+         '                            raise\n'
+         '                    else:\n'
+         '                        pulse_columns = self._rte_avtech_pulse(target, pulse) if avtech else self._rte_switch_pulse(target, pulse)\n'
+     )),
+    ("'pulse_amplitude_v' if avtech else 'pulse_current_ma' if switch else '6221_current_rms_ma'\n",
+     "'pulse_amplitude_v' if avtech else 'state' if switch and pulse.get('states') else 'pulse_current_ma' if switch else '6221_current_rms_ma'\n"),
+    ("                          'pulse': ('pulse_current_ma', '6221 pulse current (mA)'),\n",
+     "                          'pulse': ('pulse_current_ma', '6221 pulse current (mA)'),\n                          'state': ('state', 'State'),\n"),
+    ("        pulse_axis = axis in ('pulse', 'avtech')\n",
+     "        pulse_axis = axis in ('pulse', 'avtech', 'state')\n"),
+    ("        return self.__dict__.get('ppms_plot_axis') in ('pulse', 'avtech')\n",
+     "        return self.__dict__.get('ppms_plot_axis') in ('pulse', 'avtech', 'state')\n"),
+    # The table goes beside the scan's rows where the Scan box is wide enough (it then costs the plots no height),
+    # and in the first row, beside the scan list, where it is not; the pulse row and the note leave it its room.
+    ('                    info = pulse_under.get(str(widget)) or under.get(str(widget)) or widget.grid_info()\n',
+     "                    info = pulse_under.get(str(widget)) or under.get(str(widget)) or (self.rte_states_under if widget is self.__dict__.get('rte_states_frame') else None) or widget.grid_info()\n"),
+    ("                    pulse = stacked and room > 1 and self.rte_outer_place == 'under' and room >= rows_width + pulse_need\n",
+     "                    pulse = stacked and room > 1 and self.rte_outer_place == 'under' and room >= rows_width + pulse_need + self._rte_states_beside_px()\n"),
+    ('                    note = room > 1 and room >= rows_width + note_label.winfo_reqwidth() + 14\n',
+     '                    note = room > 1 and room >= rows_width + note_label.winfo_reqwidth() + 14 + self._rte_states_beside_px()\n'),
+    ('    def _rte_mode_changed(self, _event=None):\n', r"""    def _rte_build_states_table(self, scan, scan_rows):
+        self.rte_states_count = tk.StringVar(value=str(len(SWITCH_DEFAULT_STATES)))
+        self.rte_state_vars = [tuple(tk.StringVar(value=text) for text in (SWITCH_DEFAULT_STATES[index] if index < len(SWITCH_DEFAULT_STATES) else ('',) * len(SWITCH_STATE_COLUMNS))) for index in range(SWITCH_STATES_MAX)]
+        frame = ttk.Frame(scan_rows)
+        head = ttk.Frame(frame)
+        head.grid(row=0, column=0, sticky='w')
+        ttk.Label(head, text='States').grid(row=0, column=0)
+        count = ttk.Entry(head, textvariable=self.rte_states_count, width=3)
+        count.grid(row=0, column=1, padx=(3, 6))
+        self.rte_edit_widgets.append((count, 'normal'))
+        for column, title in enumerate(SWITCH_STATE_COLUMNS, 1):
+            ttk.Label(frame, text=title).grid(row=0, column=column, padx=2)
+        self.rte_state_rows = []
+        for number, variables in enumerate(self.rte_state_vars, 1):
+            widgets = [ttk.Label(frame, text=str(number))]
+            widgets[0].grid(row=number, column=0, sticky='e', padx=(0, 6))
+            for column, variable in enumerate(variables, 1):
+                entry = ttk.Entry(frame, textvariable=variable, width=7)
+                entry.grid(row=number, column=column, padx=2, pady=1)
+                self.rte_edit_widgets.append((entry, 'normal'))
+                widgets.append(entry)
+            self.rte_state_rows.append(widgets)
+        self.rte_states_under = dict(row=0, column=1, columnspan=RTE_SCAN_ROWS_LAST_COLUMN, rowspan=1, sticky='w', padx=(4, 2))
+        self.rte_states_beside = dict(row=0, column=RTE_SCAN_ROWS_LAST_COLUMN + 1, columnspan=2, rowspan=5, sticky='n', padx=(12, 2))
+        frame.grid(**self.rte_states_under)
+        frame.grid_remove()
+        self.rte_states_frame, self.rte_states_scan_box, self.rte_states_place = frame, scan, 'under'
+        for widget in (scan, scan_rows):
+            widget.bind('<Configure>', self._rte_arrange_states, add='+')
+        for event in ('<KeyRelease>', '<FocusOut>'):
+            count.bind(event, lambda _event: self._rte_show_state_rows(), add='+')
+        self._rte_show_state_rows()
+    def _rte_show_state_rows(self):
+        rows = self.__dict__.get('rte_state_rows') or ()
+        try:
+            count = int(str(self.rte_states_count.get()).strip())
+        except (ValueError, tk.TclError):
+            return
+        if not 1 <= count <= len(rows):
+            return
+        for number, widgets in enumerate(rows, 1):
+            for widget in widgets:
+                if number <= count:
+                    widget.grid()
+                else:
+                    widget.grid_remove()
+    def _rte_show_states(self, mode):
+        frame = self.__dict__.get('rte_states_frame')
+        if frame is None:
+            return
+        if mode == SWITCH_SCAN_MODE:
+            frame.grid()
+        else:
+            frame.grid_remove()
+        combo = self.__dict__.get('rte_scan_mode_combo')
+        if combo is not None:
+            combo.grid(row=0, column=0, sticky='n' if mode == SWITCH_SCAN_MODE else '')
+        self._rte_hide_state_parts()
+        self._rte_arrange_states()
+    def _rte_states_beside_px(self) -> int:
+        frame = self.__dict__.get('rte_states_frame')
+        try:
+            return frame.winfo_reqwidth() + 14 if frame is not None and self.__dict__.get('rte_states_place') == 'beside' and frame.winfo_manager() == 'grid' else 0
+        except (tk.TclError, AttributeError):
+            return 0
+    def _rte_arrange_states(self, _event=None):
+        state = self.__dict__
+        frame, scan = state.get('rte_states_frame'), state.get('rte_states_scan_box')
+        try:
+            if frame is None or scan is None or frame.winfo_manager() != 'grid':
+                return
+            room, rows_width = scan.winfo_width() - self._pair_inset(scan), sum(state.get('rte_scan_rows_columns') or ())
+            place = 'beside' if room > 1 and rows_width > 0 and room >= rows_width + frame.winfo_reqwidth() + 14 else 'under'
+            if state.get('rte_states_place') == place:
+                return
+            guard, window_width = state.setdefault('rte_states_guard', {}), scan.winfo_toplevel().winfo_width()
+            if guard.get('window') != window_width:
+                guard.update(window=window_width, flips=0)
+            guard['flips'] += 1
+            if guard['flips'] > PAIR_FLIP_LIMIT:
+                if state.get('rte_states_place') == 'under':
+                    return
+                place = 'under'
+            self.rte_states_place = place
+            frame.grid_configure(**(self.rte_states_beside if place == 'beside' else self.rte_states_under))
+            arrange = state.get('rte_arrange_beside_rows')
+            if arrange is not None:
+                self.root.after_idle(arrange)
+        except (tk.TclError, ValueError, AttributeError, TypeError):
+            return
+    def _rte_hide_state_parts(self):
+        mode = self.__dict__.get('ppms_simple_mode')
+        if 'rte_states_frame' not in self.__dict__ or mode is None or mode.get() != SWITCH_SCAN_MODE:
+            return
+        for widget in (*(self.__dict__.get('rte_switch_pulse_list_widgets') or ()), *(widget for widget, _options in self.__dict__.get('rte_outer_list_widgets') or ()), *(self.__dict__.get('rte_pulse_widgets') or ())[1:3]):
+            widget.grid_remove()
+    def _rte_switch_states_typed(self):
+        return rte_switch_states([[variable.get() for variable in row] for row in self.__dict__.get('rte_state_vars') or ()], self.rte_states_count.get())
+    def _rte_states_pulse_settings(self, settings):
+        states = [dict(state) for state in self._rte_switch_states_typed()]
+        supply, compliance_v, checked = self._rte_supply(), float(settings['compliance_v']), None
+        for state in states:
+            try:
+                checked = Keithley6221Controller._validate(state['pulse_ma'] * 1e-3, state['width_s'], compliance_v, self.rte_pulse_count.get())
+                self._field_setting_inputs(state['field_g'], self.rte_field_tolerance.get(), supply)
+            except ValueError as error:
+                raise ValueError(f"State {state['state']}: {error}") from None
+            state['width_s'] = checked[1]
+        return dict(width_s=sum(state['width_s'] for state in states) / len(states), compliance_v=checked[2], count=checked[3], states=tuple(states))
+    def _rte_states_least_extra_s(self, pulse, plan, passes):
+        states = pulse['states']
+        repeats = len(plan) // len(states) * len(passes)
+        angles = [state['angle_deg'] for state in states if state['angle_deg'] is not None] * repeats
+        fields = 2 * sum(state['field_g'] != SWITCH_STATE_READ_FIELD_G for state in states) * repeats
+        return sum(abs(b - a) for a, b in zip(angles, angles[1:])) / NEWMARK_SPEED_DEG_S + fields * STFMR_FIELD_SETTLE_REQUIRED_SAMPLES * RTE_FIELD_SETTLE_POLL_S
+    @staticmethod
+    def _rte_state_text(state):
+        return (f"{state['state']}: " + ('' if state['angle_deg'] is None else f"stage {state['angle_deg']:g}°, ")
+                + f"{state['field_g']:+g} G, {state['pulse_ma']:+g} mA, {state['width_s'] * 1e6:g} µs")
+    def _rte_states_log_text(self, pulse, plan, settings):
+        states = pulse['states']
+        return (f'; {len(states)} states x {len(plan) // len(states)} cycle(s), each write {pulse["count"]} pulse(s): '
+                + '; '.join(self._rte_state_text(state) for state in states)
+                + f'; each state read at {SWITCH_STATE_READ_FIELD_G:g} G (± {self.rte_scan_field_tolerance_g:g} G) with {settings["current_rms_ma"]:g} mA RMS')
+    def _rte_states_run_settings(self, run_settings, pulse):
+        states = [dict(state=state['state'], stage_angle_deg=state['angle_deg'], field_g=state['field_g'], pulse_current_ma=state['pulse_ma'], pulse_width_s=state['width_s']) for state in pulse['states']]
+        run_settings['plan'] = dict(run_settings['plan'], typed='the states (pulse.states), in their order', unit='state')
+        run_settings['outer'] = dict(unit='G (LS475 target)', tolerance_g=self.__dict__.get('rte_scan_field_tolerance_g'), steps=1, values=[SWITCH_STATE_READ_FIELD_G],
+                                     order='the field every state is read at: each state leaves it for its own field and comes back to it')
+        run_settings['pulse'] = dict(run_settings['pulse'], width_s='per state (pulse.states)', states=states, read_field_g=SWITCH_STATE_READ_FIELD_G,
+                                     order="read current off, stage to the state's angle at the read field, field to the state's, pulse, field back to the read field, read current on again, settle, read")
+    def _rte_states_question(self, plan, passes, limit, pulse, settings, settle_text, least_text, ramp_text=''):
+        states, name, terms = pulse['states'], self._rte_supply_label(), self._rte_magnet_terms(limit)
+        tolerance = self.__dict__.get('rte_scan_field_tolerance_g', MAGNET_FIELD_SET_DEFAULT_TOLERANCE_G)
+        cycles, turns = len(plan) // len(states), states[0]['angle_deg'] is not None
+        largest = max(states, key=lambda state: abs(state['pulse_ma']))
+        start = "the KEPCO's output is switched on at 0 A first if it is off" if name == 'KEPCO' else f'each change is a ramp at the rate, and the {name} must be at its setpoint at Start'
+        passes_text = f' Each of the {len(passes)} harmonic passes runs the whole scan, its pulses again.' if len(passes) > 1 else ''
+        stage = (f'The Newmark stage turns the SAMPLE HOLDER with its wires attached, at {NEWMARK_SPEED_DEG_S:g}°/s, to each state\'s angle '
+                 f'counted from the stage zero (absolute moves, all within ±{NEWMARK_CABLE_LIMIT_DEG:g}° of it), always at '
+                 f'{SWITCH_STATE_READ_FIELD_G:g} G with the read current off. Can the wires follow? It stays where the scan left it.'
+                 if turns else 'The stage is not moved: no state has an angle.')
+        return (f'{self.ppms_simple_mode.get()} scan: {len(states)} states in their order, {cycles} cycle(s).\n\n'
+                + '\n'.join(self._rte_state_text(state) for state in states) + '\n\n'
+                'Each state: the read current off; ' + ("the stage to the state's angle; " if turns else '')
+                + f'the field to the state\'s; one write of {pulse["count"]} pulse(s) at the state\'s current and width (compliance '
+                f'{pulse["compliance_v"]:g} V; 0 mA sends no pulse); the field back to {SWITCH_STATE_READ_FIELD_G:g} G; then the read current on '
+                f'again, {settings["current_rms_ma"]:g} mA RMS at {settings["frequency_hz"]:g} Hz, {settle_text} of settling, and the lock-ins read.\n\n'
+                f'Each field, {SWITCH_STATE_READ_FIELD_G:g} G too, is found within ±{tolerance:g} G on the LS475 as Set field finds it ({terms}; {start}), '
+                f'never beyond ±{self._rte_supply().max_current_a():g} A, and is not corrected while it is held.\n\n'
+                f'{len(states)} states x {cycles} cycle(s) x {len(passes)} harmonic pass(es) = {len(plan) * len(passes)} points.{passes_text} '
+                f'Largest pulse {abs(largest["pulse_ma"]):g} mA ({largest["width_s"] * 1e6:g} µs). The scan takes at least {least_text}; '
+                f'finding each field takes longer than is counted.{ramp_text}\n\n'
+                'The pulse has not been checked on an oscilloscope by this program: check its height and width '
+                'on yours before trusting a new setting.\n\n'
+                f'When the scan ends (completed, stopped or failed) the 6221 and then the {name} are zeroed. {stage}\n\nStart the scan?')
+    def _rte_state_field(self, supply, target_g, limit, progress, state, count, purpose):
+        try:
+            self._rte_wait(0)
+            reached = self._rte_scan_reach_field(supply, target_g, limit, state['state'], count)
+        except PPMSScanCancelled:
+            raise
+        except Exception as error:
+            error.rte_state_part = 'field'
+            raise
+        self._rte_log('field_programmed', index=progress, state=state['state'], purpose=purpose, target_field_g=target_g,
+                      tolerance_g=self.rte_scan_field_tolerance_g, current_a=float(reached['current_a']), field_g=float(reached['field_g']),
+                      corrections=reached.get('step'), g_per_a=reached.get('g_per_a'), voltage_limit_v=limit,
+                      **self._rte_magnet_log(supply, supply.lakeshore_controller.reading if supply.lakeshore else None))
+        self._rte_log_check()
+        return reached
+    def _rte_state_write(self, supply, limit, pulse, point, target, progress):
+        states = pulse['states']
+        state = states[point - 1]
+        self._rte_wait(0)
+        self._rte_zero_6221_after_scan()
+        columns = dict(state=state['state'], write_target_field_g=state['field_g'], write_field_g='', write_current_a='')
+        if state['angle_deg'] is not None:
+            if self.rte_stage_stop_event.is_set():
+                raise PPMSScanCancelled(f"{self.ppms_page_name} stopped: Stop stage was pressed; {self.rte_stage_where or 'stage not moved'}")
+            try:
+                moved = self._rte_scan_move_stage(state['angle_deg'])
+            except PPMSScanCancelled:
+                raise
+            except Exception as error:
+                error.rte_state_part = 'stage'
+                raise
+            self._rte_log('stage_move', index=progress, state=state['state'], target_deg=state['angle_deg'], angle_deg=moved['angle_deg'], px=moved['px'], steps_per_degree=moved['steps_per_degree'])
+            self._rte_log_check()
+            columns.update(stage_target_deg=state['angle_deg'], stage_angle_deg=moved['angle_deg'], stage_position_steps=moved['px'], stage_steps_per_degree=moved['steps_per_degree'])
+        away = state['field_g'] != SWITCH_STATE_READ_FIELD_G
+        if away:
+            reached = self._rte_state_field(supply, state['field_g'], limit, progress, state, len(states), 'write')
+            columns.update(write_field_g=float(reached['field_g']), write_current_a=float(reached['current_a']))
+        columns.update(self._rte_switch_pulse(target, dict(pulse, width_s=state['width_s'])))
+        if away:
+            self._rte_state_field(supply, SWITCH_STATE_READ_FIELD_G, limit, progress, state, len(states), 'read')
+        return columns
+    def _rte_mode_changed(self, _event=None):
+"""),
 )
 
 MAIN_WINDOW_TITLE = "Transport_RT_NH"
@@ -446,6 +728,53 @@ SWITCH_LOOP_DEFAULT_FIELDS_G = "200"
 RTE_LIVE_WIDE_CHARS = 48
 # The Pulse us box is one box for the Switch scans and Apply pulse, on every tab.
 SWITCH_DEFAULT_PULSE_WIDTH_US = 1000.0
+# The states of the Switch scan (see "The Switch scan runs states" above).  The table opens with four; a row past
+# them is empty until it is typed.  The numbers are those of the question's picture the user chose (0 and 90 degrees,
+# 500 G, +/-20 mA, 1000 us: the field, pulse and width of the Switch scan in their figure of the same day), and the
+# width follows the tab's Pulse us start value (30 us on Switch-IP) while it still holds what the program put there.
+SWITCH_STATES_MAX = 12
+SWITCH_STATE_COLUMNS = ("Angle \u00b0", "Field G", "Pulse mA", "Pulse \u00b5s")
+SWITCH_DEFAULT_STATES = (("0", "500", "20", "1000"), ("0", "500", "-20", "1000"), ("90", "500", "20", "1000"), ("90", "500", "-20", "1000"))
+# The field every state is read at, and the stage turns at (user's choice: "At 0 G, as MS-fourState").
+SWITCH_STATE_READ_FIELD_G = 0.0
+
+
+def rte_pulse_axis(mode):
+    return 'avtech' if mode == SWITCH2_SCAN_MODE else 'state' if mode == SWITCH_SCAN_MODE else 'pulse'
+
+
+def rte_switch_states(rows, count):
+    # The first `count` rows of the table as states: number, stage angle (None: an empty box), field, pulse
+    # current and pulse width.  The angles are typed for every state or for none.
+    try:
+        shown = int(str(count).strip())
+    except ValueError:
+        shown = 0
+    if not 1 <= shown <= min(SWITCH_STATES_MAX, len(rows)):
+        raise ValueError(f'States: type how many states the scan has, a whole number from 1 to {SWITCH_STATES_MAX}')
+    states = []
+    for number, texts in enumerate(rows[:shown], 1):
+        values = []
+        for title, text in zip(SWITCH_STATE_COLUMNS, texts):
+            text = str(text).strip()
+            if not text and title == SWITCH_STATE_COLUMNS[0]:
+                values.append(None)
+                continue
+            try:
+                value = float(text)
+            except ValueError:
+                raise ValueError(f'State {number}, {title}: ' + (f'"{text}" is not a number' if text else 'type a number')) from None
+            if not math.isfinite(value):
+                raise ValueError(f'State {number}, {title}: "{text}" is not a finite number')
+            values.append(value + 0.0)
+        angle, field, pulse_ma, width_us = values
+        if angle is not None and abs(angle) > NEWMARK_CABLE_LIMIT_DEG:
+            raise ValueError(f'State {number}: stage angles must stay within +/-{NEWMARK_CABLE_LIMIT_DEG:g}\u00b0 of the stage zero (the sample wires); {angle:g}\u00b0 is outside')
+        states.append(dict(state=number, angle_deg=angle, field_g=field, pulse_ma=pulse_ma, width_s=width_us / 1e6))
+    without = [state['state'] for state in states if state['angle_deg'] is None]
+    if without and len(without) != len(states):
+        raise ValueError(f'Angle \u00b0: state {without[0]} has no angle. Type the stage angle of every state, or empty every Angle \u00b0 box so that the stage is not moved')
+    return tuple(states)
 
 
 class SHHVScanRecorder(ScanRunRecorder):

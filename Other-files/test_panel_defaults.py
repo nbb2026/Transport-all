@@ -423,10 +423,12 @@ class SHHVConnectionColumnsTests(unittest.TestCase):
         as possible": it runs to the Scan box's right edge; when the outer
         field row sits beside the scan rows (1101 px), in Switch mode its
         label is beside its own box on the second row, under the Pulses
-        box, not above it."""
+        box, not above it.  Since 2026-11-28 the Switch scan has its
+        states' table there instead, so this is Switch2's "Pulses V:" box,
+        the same two widgets."""
         panel = self.app.rte_panel
         was = panel.ppms_simple_mode.get()
-        panel.ppms_simple_mode.set("Switch")
+        panel.ppms_simple_mode.set("Switch2")
         panel._rte_mode_changed()
         try:
             for width in (lab_window(self.app)[0], LAB_WIDE):
@@ -445,6 +447,58 @@ class SHHVConnectionColumnsTests(unittest.TestCase):
                         self.assertGreater(box.winfo_rootx(), label.winfo_rootx())
                     self.assertLessEqual(right, scan.winfo_rootx() + scan.winfo_width())
         finally:
+            panel.ppms_simple_mode.set(was)
+            panel._rte_mode_changed()
+            self.root.update()
+
+
+    def test_the_switch_scan_shows_its_states_table(self):
+        """User, 2026-11-28: "change the switch scan mode to set the state 1,
+        2, 3, 4... like MS_four state".  In the Switch scan the Scan box
+        shows the table (States, and Angle, Field G, Pulse mA, Pulse us of
+        each state) in place of "Pulses mA", "Outer field G" and the Pulse
+        us box; it is inside the Scan box, over no other widget, at both
+        window widths, beside the scan's rows where the box is wide enough."""
+        panel = self.app.rte_panel
+        was = panel.ppms_simple_mode.get()
+        panel.ppms_simple_mode.set("Switch")
+        panel._rte_mode_changed()
+
+        def box(widget):
+            return (widget.winfo_rootx(), widget.winfo_rooty(), widget.winfo_rootx() + widget.winfo_width(), widget.winfo_rooty() + widget.winfo_height())
+        try:
+            frame = panel.rte_states_frame
+            rows, scan = frame.master, frame.master.master
+            for width in (lab_window(self.app)[0], LAB_WIDE):
+                for count in ("4", "8", "4"):
+                    panel.rte_states_count.set(count)
+                    panel._rte_show_state_rows()
+                    self.show(width)
+                    for _ in range(3):
+                        self.root.update()
+                    with self.subTest(width=width, states=count):
+                        self.assertTrue(frame.winfo_ismapped())
+                        shown = [row for row in panel.rte_state_rows if row[0].winfo_ismapped()]
+                        self.assertEqual(len(shown), int(count))
+                        self.assertTrue(all(widget.winfo_ismapped() for row in shown for widget in row))
+                        hidden = (*panel.rte_switch_pulse_list_widgets, *(w for w, _options in panel.rte_outer_list_widgets), *panel.rte_pulse_widgets[1:3])
+                        self.assertFalse([str(w) for w in hidden if w.winfo_ismapped()])
+                        self.assertTrue(all(w.winfo_ismapped() for w in (panel.rte_pulse_widgets[0], *panel.rte_pulse_widgets[3:], *panel.rte_cycles_widgets)))
+                        left, top, right, bottom = box(frame)
+                        print(f"Switch states table at {self.root.winfo_width()} px, {count} states: {panel.rte_states_place}, "
+                              f"{right - left}x{bottom - top} px in a Scan box of {scan.winfo_width()}x{scan.winfo_height()} px; "
+                              f"pulse row {panel.__dict__.get('rte_pulse_place')}, note {panel.__dict__.get('rte_note_place')}")
+                        s_left, s_top, s_right, s_bottom = box(scan)
+                        self.assertTrue(s_left <= left and right <= s_right and s_top <= top and bottom <= s_bottom, (box(frame), box(scan)))
+                        for other in rows.grid_slaves():
+                            if other is frame or not other.winfo_ismapped() or not other.winfo_width():
+                                continue
+                            o_left, o_top, o_right, o_bottom = box(other)
+                            self.assertFalse(left < o_right and o_left < right and top < o_bottom and o_top < bottom,
+                                             f"the table {box(frame)} is over {other.winfo_class()} {other.cget('text') if 'text' in other.keys() else ''} {box(other)}")
+        finally:
+            panel.rte_states_count.set("4")
+            panel._rte_show_state_rows()
             panel.ppms_simple_mode.set(was)
             panel._rte_mode_changed()
             self.root.update()

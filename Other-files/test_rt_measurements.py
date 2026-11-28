@@ -352,6 +352,26 @@ class ThePage(unittest.TestCase):
         panel.rte_set_measurement("Switch-OOP")
         self.assertEqual(([v.get() for v in panel.ppms_simple_range], panel.rte_pulse_width_us.get()), (["18", "-18", "1"], "500"))
 
+    def test_the_states_pulse_widths_follow_the_tab_as_the_pulse_us_box_does(self):
+        """The Switch scan's states (user, 2026-11-28) start with 1000 us; on Switch-IP, whose pulses are 30 us
+        (user, 2026-11-27), a 1000 us pulse would be 33 times the one expected, so the states' widths follow
+        the tab while they still hold what the program put there.  A typed width, and a row not typed yet, stay."""
+        panel = self.page()
+        self.assertEqual({row[3] for row in app.SWITCH_DEFAULT_STATES}, {f"{app.SWITCH_DEFAULT_PULSE_WIDTH_US:g}"})
+
+        def widths():
+            return [row[3].get() for row in panel.rte_state_vars[:5]]
+        self.assertEqual(widths(), ["1000"] * 4 + [""])
+        panel.rte_set_measurement("Switch-OOP")
+        self.assertEqual(widths(), ["1000"] * 4 + [""])
+        panel.rte_state_vars[1][3].set("200")
+        panel.rte_set_measurement("Switch-IP")
+        self.assertEqual(widths(), ["30", "200", "30", "30", ""])
+        panel.rte_set_measurement("SHHV")
+        self.assertEqual(widths(), ["1000", "200", "1000", "1000", ""])
+        # Nothing else of a state follows the tab.
+        self.assertEqual([[v.get() for v in row[:3]] for row in panel.rte_state_vars[:4]], [list(row[:3]) for row in app.SWITCH_DEFAULT_STATES])
+
     def test_settle_acquire_and_the_field_follow_between_the_two_switch_tabs(self):
         """Switch-OOP's Switch-loop shows Settle s 10, Acquire s 10 and 500 G (user's figure, 2026-11-28);
         Switch-IP's shows 30, 30 and 200 G.  Both tabs stay on Switch-loop, so nothing but the tab changes."""

@@ -414,8 +414,12 @@ class RTEStageBlockTests(Built, unittest.TestCase):
                       f"{sorted(c.winfo_height() for c in shown)} px tall; pulse row {panel.rte_pulse_place}, note {panel.rte_note_place}")
                 with self.subTest(mode=mode):
                     self.assertEqual(len(shown), 4, "X, Y and X, Y vs time")
-                    if mode != "Switch-loop":
+                    # Switch has its states' table beside the rows there since 2026-11-28, and the pulse row and
+                    # the note go beside only with the room it leaves.
+                    if mode == "Switch2":
                         self.assertEqual((panel.rte_pulse_place, panel.rte_note_place), ("beside", "beside"))
+                    if mode == "Switch":
+                        print(f"SHHV Switch states table: {panel.rte_states_place}")
                     self.assertEqual(panel.rte_avtech_row.winfo_ismapped(), mode == "Switch2")
                     for canvas in shown:
                         self.assertGreaterEqual(canvas.winfo_height(), 55, "Increase the window height")

@@ -71,11 +71,13 @@ class Fake6221:
 
 
 class SwitchScan(ete.EndToEnd):
-    def make_switch(self, fields="100, -50", span=("-2", "2", "2"), width="30", pulses="1"):
+    def make_switch(self, states=None, fields="100", span=None, width="30", pulses="1", cycles="1"):
         """The page ready for a Switch scan: SR830-1 alone at the first
         harmonic, 0.5 mA RMS read current, the KEPCO and an LS475 that reads
         100 G per A of it, the fake 6221, and the field setting's waits made
-        tiny."""
+        tiny.  ``states``: the table's rows (Angle, Field G, Pulse mA, Pulse
+        us) as typed; ``span``: one state a pulse current instead, all at
+        ``fields`` G with no angle."""
         h = self.make(meter="sr830")
         panel = h.panel
         self.assertIs(type(panel), app.RTEPanel)
@@ -85,14 +87,13 @@ class SwitchScan(ete.EndToEnd):
         with patch.object(app.CombinedControlApp, "_draw_nonlocal_series"):
             panel.ppms_simple_mode.set("Switch")
             panel._rte_mode_changed()
-        # The pulses as typed in "Pulses mA:" (user, 2026-11-23: "change the
-        # switch current pulse input like the outer field").
-        panel.rte_switch_pulses_var.set(", ".join(f"{value:g}" for value in app.ppms_scan_axis(*map(float, span))))
-        # Round trip ticked: the scan tests go back through the list (off at
-        # the start in Switch since 2026-11-24).
-        panel.rte_round_trip.set(True)
-        panel.rte_outer_ranges["Switch"][0].set(fields)
-        panel.rte_pulse_width_us.set(width)
+        # The states as typed in the table (user, 2026-11-28: "change the
+        # switch scan mode to set the state 1, 2, 3, 4...").
+        if states is None:
+            states = ([("", fields, f"{value:g}", width) for value in app.ppms_scan_axis(*map(float, span))] if span
+                      else [("", "100", "-2", width), ("", "-50", "2", width), ("", "0", "0", width)])
+        type_states(panel, states)
+        panel.ppms_field_scan_loop_var.set(cycles)
         panel.rte_pulse_count.set(pulses)
         h.gauss = ete.FollowingGauss(h.log, h.kepco)
         panel.rte_controllers["gauss"] = h.gauss
@@ -157,6 +158,15 @@ class SwitchScan(ete.EndToEnd):
         line.set = record
         h.log.clear()
         return h
+
+
+def type_states(panel, states):
+    """The table as typed: the States box and each state's four boxes."""
+    panel.rte_states_count.set(str(len(states)))
+    for variables, texts in zip(panel.rte_state_vars, states):
+        for variable, text in zip(variables, texts):
+            variable.set(text)
+    panel._rte_show_state_rows()
 
 
 def status_lines(h):
@@ -308,10 +318,28 @@ class SwitchPageTests(unittest.TestCase):
             # The user's settings (2026-11-25: "default use this setting in
             # switch"): the loop 14 to -14 to 14 mA in 2 mA steps, field -12
             # G, Settle s 30, Round trip off.
-            self.assertEqual(panel.rte_switch_pulses_var.get(), "14, 12, 10, 8, 6, 4, 2, 0, -2, -4, -6, -8, -10, -12, -14, -12, -10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10, 12, 14")
+            # Since 2026-11-28 the states' table (user: "change the switch scan mode to set the state 1, 2, 3,
+            # 4... like MS_four state"), in place of "Pulses mA", "Outer field G" and the Pulse us box.
             self.assertEqual({w.grid_removed for w in panel.rte_range_widgets}, {True})
-            self.assertEqual({w.grid_removed for w in panel.rte_switch_pulse_list_widgets}, {False})
-            self.assertEqual(panel.rte_switch_pulse_list_widgets[0].options["text"], "Pulses mA:")
+            self.assertEqual({w.grid_removed for w in panel.rte_switch_pulse_list_widgets}, {True})
+            self.assertEqual({w.grid_removed for w, _options in panel.rte_outer_list_widgets}, {True})
+            frame = panel.rte_states_frame
+            self.assertFalse(frame.grid_removed)
+            self.assertEqual((frame.grid_options["row"], frame.grid_options["column"]), (0, 1))
+            self.assertEqual([w.options["text"] for w in Recorder.made if w.parent is frame and w.options.get("text")][:4], ["Angle °", "Field G", "Pulse mA", "Pulse µs"])
+            self.assertEqual((panel.rte_states_count.get(), len(panel.rte_state_rows)), ("4", 12))
+            self.assertEqual([[v.get() for v in row] for row in panel.rte_state_vars[:5]],
+                             [["0", "500", "20", "1000"], ["0", "500", "-20", "1000"], ["90", "500", "20", "1000"], ["90", "500", "-20", "1000"], ["", "", "", ""]])
+            self.assertEqual([{w.grid_removed for w in row} for row in panel.rte_state_rows], [{False}] * 4 + [{True}] * 8)
+            self.assertEqual([row[0].options["text"] for row in panel.rte_state_rows[:4]], ["1", "2", "3", "4"])
+            for row in panel.rte_state_rows:
+                for entry in row[1:]:
+                    self.assertIn((entry, "normal"), panel.rte_edit_widgets, "locked with the other boxes while a scan runs")
+            # The States box shows that many rows; a count that is no number leaves them.
+            for typed, shown in (("2", 2), ("", 2), ("x", 2), ("0", 2), ("13", 2), ("12", 12), ("4", 4)):
+                panel.rte_states_count.set(typed)
+                panel._rte_show_state_rows()
+                self.assertEqual([{w.grid_removed for w in row} for row in panel.rte_state_rows], [{False}] * shown + [{True}] * (12 - shown), typed)
             # Acquire s starts at 30 s in Switch (user, 2026-11-23: "set the
             # default acquire time in switch as 30s").
             self.assertEqual(panel.ppms_acquisition_time_var.get(), "30")
@@ -325,13 +353,12 @@ class SwitchPageTests(unittest.TestCase):
             self.assertEqual({w.grid_removed for w in panel.rte_cycles_widgets}, {False})
             self.assertEqual([(w.grid_options["row"], w.grid_options["column"]) for w in panel.rte_cycles_widgets], [(2, 5), (2, 6)])
             self.assertEqual({w.grid_removed for w in (*panel.rte_loops_widgets, panel.rte_round_trip_check)}, {True})
-            self.assertIs(panel.rte_outer_list_entry.options["textvariable"], panel.rte_outer_ranges["Switch"][0])
-            self.assertEqual(panel.rte_outer_ranges["Switch"][0].get(), "-12")
             self.assertEqual((panel.rte_scan_units.get(), panel.rte_scan_note.get()),
-                             ("", "Switch: 6221 pulse mA; outer: field G"))
-            self.assertEqual({w.grid_removed for w in pulse_row}, {False})
+                             ("", "Switch: states x Cycles; read at 0 G"))
+            # "6221 write" and Pulses stay (the pulses of a write are every state's); the width is the state's.
+            self.assertEqual([w.grid_removed for w in pulse_row], [False, True, True, False, False])
             self.assertEqual({w.grid_options["row"] for w in pulse_row}, {4})
-            self.assertEqual(panel.ppms_plot_axis, "pulse")
+            self.assertEqual(panel.ppms_plot_axis, "state")
             self.assertIs(panel.rte_time_row_on, True)
             self.assertFalse(panel.rte_time_frame.grid_removed)
             self.assertEqual(panel.rte_time_frame.grid_options, dict(row=1, column=0, columnspan=3, sticky="nsew"))
@@ -343,6 +370,7 @@ class SwitchPageTests(unittest.TestCase):
             panel.ppms_simple_mode.set("Angle+Field")
             panel._rte_mode_changed()
             self.assertEqual({w.grid_removed for w in pulse_row}, {True})
+            self.assertTrue(panel.rte_states_frame.grid_removed)
             self.assertEqual(panel.ppms_field_scan_stable_var.get(), "0.5", "Settle s back to 0.5 in the other modes")
             self.assertEqual({w.grid_removed for w in panel.rte_cycles_widgets}, {True})
             self.assertEqual({w.grid_removed for w in (*panel.rte_loops_widgets, panel.rte_round_trip_check)}, {False})
@@ -450,32 +478,79 @@ class AveragingTraceTests(unittest.TestCase):
 
 
 class SwitchScanTests(SwitchScan):
-    def test_each_point_is_written_with_a_pulse_then_read(self):
-        h = self.make_switch()
+    def make_states(self, states, **kwargs):
+        """make_switch with the scan's steps kept in h.log in the order they ran: each field found, each
+        pulse and each restart of the read current, beside the stage's moves and the lock-in reads."""
+        h = self.make_switch(states=states, **kwargs)
+        panel = h.panel
+        for name, entry in (("_rte_scan_reach_field", lambda supply, target, *rest: ("field", target)),
+                            ("_rte_switch_pulse", lambda pulse_ma, pulse: ("pulse", pulse_ma, round(pulse["width_s"] * 1e6, 6))),
+                            ("_rte_switch_read_on", lambda settings: ("read on",))):
+            def traced(*args, real=getattr(panel, name), entry=entry):
+                h.log.append((*entry(*args), threading.get_ident()))
+                return real(*args)
+            setattr(panel, name, traced)
+        return h
+
+    @staticmethod
+    def steps(h):
+        return [entry[:-1] if entry[0] in ("field", "pulse", "read on") else entry[:3] if entry[0] == "stage" else entry[:2]
+                for entry in h.log if entry[0] in ("field", "pulse", "read on", "lockins") or entry[:2] == ("stage", "move")]
+
+    def test_each_state_is_written_then_read_at_zero_field(self):
+        """User, 2026-11-28: "can you change the switch scan mode to set the state 1, 2, 3, 4... like MS_four
+        state? the each state can contain settings like stage angle, field, pulse mA, pulse us, the readout
+        current remains the value in the setting."  Chosen from the questions: every state is read at 0 G as
+        MS-fourState reads, and the states run in their order, times Cycles."""
+        h = self.make_states([("0", "100", "-2", "30"), ("90", "-50", "2", "50"), ("90", "0", "0", "30")], cycles="2")
         h.draw.reset_mock()         # the harness drew SHHV's Angle axes while it set the page up
         self.start(h)
         panel = h.panel
         h.showerror.assert_not_called()
         title, question = h.askyesno.call_args.args[:2]
         self.assertEqual(title, "SHHV scan")
-        self.assertIn("Field, the OUTER loop: 2 fields in the order typed: +100, -50 G, each within ±2 G", question)
-        self.assertIn("6221 pulse current, the INNER loop: 5 pulses a loop in the order typed, -2, +0, +2 mA and back, "
-                      "1 loop(s). Largest pulse 2 mA.", question)
-        self.assertIn("one write of 1 pulse(s) of 30 µs at the point's current", question)
-        self.assertIn("then the read current on again, 0.5 mA RMS at 317.3 Hz", question)
-        self.assertIn("2 fields x 5 pulses x 1 harmonic pass(es) = 10 points.", question)
+        self.assertIn("Switch scan: 3 states in their order, 2 cycle(s).\n\n"
+                      "1: stage 0°, +100 G, -2 mA, 30 µs\n2: stage 90°, -50 G, +2 mA, 50 µs\n3: stage 90°, +0 G, +0 mA, 30 µs\n\n", question)
+        self.assertIn("Each state: the read current off; the stage to the state's angle; the field to the state's; one write of "
+                      "1 pulse(s) at the state's current and width", question)
+        self.assertIn("the field back to 0 G; then the read current on again, 0.5 mA RMS at 317.3 Hz", question)
+        self.assertIn("3 states x 2 cycle(s) x 1 harmonic pass(es) = 6 points.", question)
+        self.assertIn("Largest pulse 2 mA (30 µs).", question)
+        self.assertIn("always at 0 G with the read current off. Can the wires follow?", question)
+        # One state: the stage at 0 G, the field, the pulse, 0 G again, the read current, the read.  A state
+        # written at 0 G leaves the field where it is, and 0 mA sends no pulse.
+        cycle = [("stage", "move", 0.0), ("field", 100.0), ("pulse", -2.0, 30.0), ("field", 0.0), ("read on",), ("lockins", "read"),
+                 ("stage", "move", 90.0), ("field", -50.0), ("pulse", 2.0, 50.0), ("field", 0.0), ("read on",), ("lockins", "read"),
+                 ("stage", "move", 90.0), ("pulse", 0.0, 30.0), ("read on",), ("lockins", "read")]
+        first = [("lockins", "first") if index == 5 else step for index, step in enumerate(cycle)]
+        self.assertEqual(self.steps(h), [("field", 0.0)] + first + cycle)
+        # The read current is off before the stage turns, a field changes or a pulse goes out.
+        on = False
+        for entry in h.log:
+            if entry[:2] in (("6221", "on"), ("read on",)) or entry[0] == "read on":
+                on = True
+            elif entry[:2] == ("6221", "off"):
+                on = False
+            elif entry[0] in ("field", "pulse") or entry[:2] == ("stage", "move"):
+                self.assertFalse(on, entry)
         rows = self.rows(h)
-        self.assertEqual([(r["outer_target_field_g"], r["outer_field_index"], float(r["pulse_current_ma"]))
-                          for r in rows],
-                         [("100.0", "1", v) for v in (-2.0, 0.0, 2.0, 0.0, -2.0)]
-                         + [("-50.0", "2", v) for v in (-2.0, 0.0, 2.0, 0.0, -2.0)])
-        self.assertEqual({(r["module"], r["scan_mode"]) for r in rows}, {("SHHV", "Switch")})
-        self.assertEqual([r["pulse_in_compliance"] for r in rows[:5]], ["False", "no pulse", "False", "no pulse", "False"])
-        # The latch before each pulse: the read current of the reading before (review, 2026-11-22).
-        self.assertEqual([r["read_in_compliance_before_pulse"] for r in rows[:5]], ["False", "", "False", "", "False"])
-        self.assertEqual({(float(r["pulse_width_s"]), r["pulse_count"]) for r in rows}, {(3e-5, "1")})
+        self.assertEqual([(r["loop"], r["point"], r["state"]) for r in rows],
+                         [(str(loop), str(state), str(state)) for loop in (1, 2) for state in (1, 2, 3)])
+        self.assertEqual([(r["write_target_field_g"], float(r["pulse_current_ma"]), float(r["pulse_width_s"]), r["stage_target_deg"])
+                          for r in rows[:3]],
+                         [("100.0", -2.0, 3e-5, "0.0"), ("-50.0", 2.0, 5e-5, "90.0"), ("0.0", 0.0, 3e-5, "90.0")])
+        self.assertEqual({(r["module"], r["scan_mode"], r["outer_target_field_g"], r["outer_field_index"], r["pulse_count"]) for r in rows},
+                         {("SHHV", "Switch", "0.0", "1", "1")})
+        self.assertEqual([r["pulse_in_compliance"] for r in rows[:3]], ["False", "False", "no pulse"])
         for r in rows:
-            self.assertAlmostEqual(float(r["measured_field_g"]), float(r["outer_target_field_g"]), delta=2.0)
+            # Read at 0 G; written at the state's field, which the row keeps as the LS475 read it.
+            self.assertAlmostEqual(float(r["measured_field_g"]), 0.0, delta=2.0)
+            if r["state"] == "3":
+                self.assertEqual((r["write_field_g"], r["write_current_a"]), ("", ""))
+            else:
+                self.assertAlmostEqual(float(r["write_field_g"]), float(r["write_target_field_g"]), delta=2.0)
+                self.assertAlmostEqual(float(r["write_current_a"]), float(r["write_target_field_g"]) / 100.0, delta=0.021)
+            self.assertAlmostEqual(float(r["stage_angle_deg"]), float(r["stage_target_deg"]), delta=0.01)
             self.assertAlmostEqual(float(r["sr830_8_x_over_i_ohm"]), float(r["sr830_8_x_v"]) / 0.5e-3)
             self.assertEqual(r["6221_current_rms_ma"], "0.5")
             # Each reading follows the read current's restart: 5 x the
@@ -485,11 +560,11 @@ class SwitchScanTests(SwitchScan):
         self.assertEqual(app.SWITCH_READ_SETTLE_TAUS, 5.0)
         self.assertIn("(5 x ", question)
         self.assertIn("then Settle s 0 s) of settling", question)
-        # Six trains (0 mA sends none), each the CIDWM pulse: a 50 % square
-        # of period 2 x 30 us, amplitude |I|/2, offset I/2, one cycle.
-        self.assertEqual(len(h.fake.trains), 6)
-        frequency = 1.0 / (2.0 * 30e-6)
-        for train, current_ma in zip(h.fake.trains, (-2.0, 2.0, -2.0) * 2):
+        # Four trains (0 mA sends none), each the CIDWM pulse at its state's width: a 50 % square of period
+        # 2 x width, amplitude |I|/2, offset I/2, one cycle.
+        self.assertEqual(len(h.fake.trains), 4)
+        for train, (current_ma, width_s) in zip(h.fake.trains, ((-2.0, 30e-6), (2.0, 50e-6)) * 2):
+            frequency = 1.0 / (2.0 * width_s)
             self.assertAlmostEqual(train["SOUR:WAVE:AMPL"], abs(current_ma) * 1e-3 / 2.0)
             self.assertAlmostEqual(train["SOUR:WAVE:OFFS"], current_ma * 1e-3 / 2.0)
             self.assertAlmostEqual(train["SOUR:WAVE:FREQ"], frequency, delta=frequency * 1e-9)
@@ -510,7 +585,7 @@ class SwitchScanTests(SwitchScan):
                          ["SOUR:WAVE:ABOR", f"CURR:COMP {float(h.configured[0]['compliance_v']):.12g}",
                           "SOUR:WAVE:FUNC SQU", "SOUR:WAVE:DCYC 50"])
         # The read current after it: MS-fourState's sine, armed with the
-        # output off, on at INIT; ten times, once before every reading.
+        # output off, on at INIT; six times, once before every reading.
         sine = sent.index("SOUR:WAVE:FUNC SIN")
         self.assertEqual(sent[sine - 2:sine + 14], [
             "SOUR:WAVE:ABOR", f"CURR:COMP {float(h.configured[0]['compliance_v']):.12g}", "SOUR:WAVE:FUNC SIN",
@@ -518,15 +593,13 @@ class SwitchScanTests(SwitchScan):
             "SOUR:WAVE:RANG BEST", "SOUR:WAVE:EXTR OFF", "SOUR:WAVE:DUR:CYCL INF",
             f"SOUR:WAVE:PMAR {app.NONLOCAL_MARKER_PHASE_DEG:g}", f"SOUR:WAVE:PMAR:OLIN {app.NONLOCAL_MARKER_LINE}",
             "SOUR:WAVE:PMAR:STAT ON", "OUTP OFF", "SOUR:WAVE:ABOR", "SOUR:WAVE:ARM", "SOUR:WAVE:INIT"])
-        self.assertEqual(len(h.fake.sines), 10, "the read current on again before every reading")
+        self.assertEqual(len(h.fake.sines), 6, "the read current on again before every reading")
         self.assertEqual(h.fake.output, 0, "off at the end")
         # The acquisition line follows the read current (user, 2026-11-24:
         # "fix the 6221 output OFF line too"): ON before each reading, OFF
         # for each pulse and at the end.
         shown = [text for text in status_lines(h) if text.startswith("Transport acquisition: 6221")]
-        self.assertEqual(shown.count("Transport acquisition: 6221 ON, 0.5 mA RMS at 317.3 Hz (read current)"), 10)
-        on = shown.index("Transport acquisition: 6221 ON, 0.5 mA RMS at 317.3 Hz (read current)")
-        self.assertTrue(any("OFF" in text for text in shown[:on]), shown[:on + 1])
+        self.assertEqual(shown.count("Transport acquisition: 6221 ON, 0.5 mA RMS at 317.3 Hz (read current)"), 6)
         self.assertIn("OFF", shown[-1])
         # A pulse is never sent with the read current on: each train's
         # commands start after an output read back off.
@@ -535,51 +608,50 @@ class SwitchScanTests(SwitchScan):
                 before = sent[:index]
                 last_sine = max((i for i, c in enumerate(before) if c in ("SOUR:WAVE:INIT", "FULL SET-UP")), default=-1)
                 self.assertIn("SOUR:WAVE:ABOR", before[last_sine + 1:])
-        kinds = [entry[:2] for entry in h.log if entry[0] in ("6221", "lockins")]
-        self.assertEqual(kinds[:3], [("6221", "on"), ("6221", "off"), ("6221", "OUTP?")])
         # Everything on the page's worker.
         self.assertEqual({entry[-1] for entry in h.log}, {h.worker})
-        self.assertEqual(panel.ppms_field_scan_status_var.get(), "Completed; KEPCO and 6221 zeroed")
+        status = panel.ppms_field_scan_status_var.get()
+        self.assertTrue(status.startswith("Completed; ") and status.endswith("; stage at +90.000°"), status)
+        self.assertEqual(self.names(h, "6221", "kepco")[-3:], ete.ZEROED)
         events = ete.RunLogBase.events(h)
         prepared = events[0]
-        self.assertEqual((prepared["mode"], prepared["plan"]["unit"], prepared["plan"]["points"]),
-                         ("Switch", "mA (6221 pulse)", 5))
-        self.assertEqual({k: prepared["pulse"][k] for k in ("width_s", "count")}, {"width_s": 3e-5, "count": 1})
-        self.assertEqual(prepared["outer"]["values"], [100.0, -50.0])
-        self.assertEqual(prepared["outer"]["order"], "outer first, in the order typed; the pulse loop inner")
+        self.assertEqual((prepared["mode"], prepared["plan"]["unit"], prepared["plan"]["points"], prepared["plan"]["loops"]),
+                         ("Switch", "state", 6, 2))
+        self.assertEqual(prepared["pulse"]["states"], [
+            dict(state=1, stage_angle_deg=0.0, field_g=100.0, pulse_current_ma=-2.0, pulse_width_s=3e-5),
+            dict(state=2, stage_angle_deg=90.0, field_g=-50.0, pulse_current_ma=2.0, pulse_width_s=5e-5),
+            dict(state=3, stage_angle_deg=90.0, field_g=0.0, pulse_current_ma=0.0, pulse_width_s=3e-5)])
+        self.assertEqual((prepared["pulse"]["count"], prepared["pulse"]["read_field_g"], prepared["outer"]["values"]), (1, 0.0, [0.0]))
+        self.assertIn("field back to the read field, read current on again, settle, read", prepared["pulse"]["order"])
         pulses = [e for e in events if e["event"] == "pulse"]
-        self.assertEqual([(e["step_index"], e["pulse_current_ma"]) for e in pulses],
-                         [(1, v) for v in (-2.0, 0.0, 2.0, 0.0, -2.0)] + [(2, v) for v in (-2.0, 0.0, 2.0, 0.0, -2.0)])
-        self.assertEqual([e["target_field_g"] for e in events if e["event"] == "field_programmed"], [100.0, -50.0])
+        self.assertEqual([(e["loop"], e["state"], e["pulse_current_ma"]) for e in pulses],
+                         [(loop, state, value) for loop in (1, 2) for state, value in ((1, -2.0), (2, 2.0), (3, 0.0))])
+        fields = [e for e in events if e["event"] == "field_programmed"]
+        self.assertEqual([(e.get("purpose", "start"), e["target_field_g"]) for e in fields],
+                         [("start", 0.0)] + [("write", 100.0), ("read", 0.0), ("write", -50.0), ("read", 0.0)] * 2)
+        self.assertEqual([e["target_deg"] for e in events if e["event"] == "stage_move"], [0.0, 90.0, 90.0] * 2)
         self.assertEqual(events[-1]["event"], "run_finished")
-        # The pulse plots in volts (user, 2026-11-22: "always use voltage in
-        # the X,Y vs current pulse plot"), X and Y only ("delete R voltage
-        # against the pulse current"); each point the mean of the Acquire s
-        # reading.
-        pulse_calls = [call for call in h.draw.call_args_list if call.args[2] == "6221 pulse current (mA)"]
-        self.assertEqual({call.args[3] for call in pulse_calls}, {"X voltage", "Y voltage"})
-        self.assertEqual({call.kwargs["auto_voltage_unit"] for call in pulse_calls}, {True})
-        self.assertEqual({call.kwargs["x_range"] for call in pulse_calls}, {(-2.0, 2.0)}, "the typed pulses' ends")
+        # The plots: X and Y in volts against the state's number, the cycles as lines of their own.
+        state_calls = [call for call in h.draw.call_args_list if call.args[2] == "State"]
+        self.assertEqual({call.args[3] for call in state_calls}, {"X voltage", "Y voltage"})
+        self.assertEqual({call.kwargs["x_range"] for call in state_calls}, {(0.5, 3.5)})
         canvases = h.panel.ppms_harmonic_canvases
-        last_x = [call for call in pulse_calls if call.args[0] is canvases[(1, "x")]][-1]
+        last_x = [call for call in state_calls if call.args[0] is canvases[(1, "x")]][-1]
         saved = h.panel.ppms_field_scan_rows
-        self.assertEqual(sorted(v for points in last_x.args[1].values() for _x, v in points),
-                         sorted(r["sr830_8_x_v"] for r in saved))
-        self.assertFalse([call for call in pulse_calls if call.args[0] is canvases[(1, "theta")]])
+        self.assertEqual(len(saved), 6)
+        self.assertEqual(sorted(x for points in last_x.args[1].values() for x, _v in points), [1, 1, 2, 2, 3, 3])
+        self.assertEqual(len(last_x.args[1]), 2, "one line a cycle")
+        self.assertFalse([call for call in state_calls if call.args[0] is canvases[(1, "theta")]])
         # X and Y against time: every sample of each reading, a segment per
         # reading (user, 2026-11-22: "it should show the voltage in the
         # period not a single point"), on the time of the scan.
-        self.assertEqual(len(saved), 10)
         for channel, sign in (("x", 1), ("y", -1)):
             timed = [call for call in h.draw.call_args_list if call.args[0] is h.panel.rte_time_canvases[channel]][-1]
             self.assertEqual(timed.args[2:4], ("Time (s)", f"{channel.upper()} voltage"))
             series = timed.args[1]
-            self.assertEqual(sorted(series), sorted(f"SR830-1 #{index}" for index in range(1, 11)))
+            self.assertEqual(sorted(series), sorted(f"SR830-1 #{index}" for index in range(1, 7)))
             for points in series.values():
                 self.assertEqual([v for _t, v in points], [sign * 1e-6, sign * 2e-6, sign * 3e-6])
-                self.assertEqual([round(t - points[0][0], 6) for t, _v in points], [0.0, 1.0, 2.0])
-            starts = [series[f"SR830-1 #{index}"][0][0] for index in range(1, 11)]
-            self.assertEqual(starts, sorted(starts))
         # And in the run folder's trace CSV, with each reading's means.
         trace = h.panel.rte_switch_trace_path
         self.assertEqual(trace.name, h.panel.rte_recorder.csv_path.stem + "_trace.csv") if h.panel.__dict__.get(
@@ -589,11 +661,61 @@ class SwitchScanTests(SwitchScan):
         with trace.open(encoding="utf-8-sig", newline="") as handle:
             lines = list(app.csv.reader(handle))
         self.assertEqual(lines[0], ["time_s", "quantity", "value", "unit", "point"])
-        self.assertEqual(sum(1 for line in lines if line[1] == "SR830 #8 X"), 30)
-        self.assertEqual(sum(1 for line in lines if line[1] == "SR830 #8 Y"), 30)
-        self.assertEqual(sum(1 for line in lines if line[1] == "SR830 #8 mean X"), 10)
-        self.assertEqual({line[3] for line in lines[1:]}, {"V"})
+        self.assertEqual(sum(1 for line in lines if line[1] == "SR830 #8 X"), 18)
+        self.assertEqual(sum(1 for line in lines if line[1] == "SR830 #8 mean X"), 6)
         self.assertEqual(lines[1][4], "#1 -2 mA")
+
+    def test_states_without_angles_leave_the_stage_alone(self):
+        """With every Angle box empty the scan is the Switch scan as it was for the stage: not moved, and
+        not needed (it may be disconnected)."""
+        h = self.make_states([("", "100", "-2", "30"), ("", "100", "2", "30")])
+        h.panel.rte_controllers["newmark"] = types.SimpleNamespace(connected=False, motion_may_run=False, label="Newmark stage")
+        self.start(h)
+        h.showerror.assert_not_called()
+        question = h.askyesno.call_args.args[1]
+        self.assertIn("1: +100 G, -2 mA, 30 µs\n2: +100 G, +2 mA, 30 µs", question)
+        self.assertIn("The stage is not moved: no state has an angle.", question)
+        self.assertNotIn("the stage to the state's angle", question)
+        self.assertEqual(self.steps(h), [("field", 0.0), ("field", 100.0), ("pulse", -2.0, 30.0), ("field", 0.0), ("read on",), ("lockins", "first"),
+                                         ("field", 100.0), ("pulse", 2.0, 30.0), ("field", 0.0), ("read on",), ("lockins", "read")])
+        rows = self.rows(h)
+        self.assertEqual([r["state"] for r in rows], ["1", "2"])
+        self.assertNotIn("stage_angle_deg", rows[0])
+        self.assertEqual(h.panel.ppms_field_scan_status_var.get(), "Completed; KEPCO and 6221 zeroed")
+
+    def test_the_table_is_checked_before_anything_is_sent(self):
+        for states, count, message in (
+                ([("", "100", "2", "30")], "0", "States: type how many states the scan has, a whole number from 1 to 12"),
+                ([("", "100", "2", "30")], "13", "States: type how many states the scan has"),
+                ([("", "", "2", "30")], "1", "State 1, Field G: type a number"),
+                ([("", "100", "2", "30"), ("", "100", "x", "30")], "2", 'State 2, Pulse mA: "x" is not a number'),
+                ([("0", "100", "2", "30"), ("", "100", "2", "30")], "2", "Angle °: state 2 has no angle. Type the stage angle of every state, or empty every Angle ° box"),
+                ([("361", "100", "2", "30")], "1", "State 1: stage angles must stay within +/-360° of the stage zero (the sample wires); 361° is outside"),
+                ([("", "100", "2", "1")], "1", "State 1: 6221 pulse width must be between")):
+            with self.subTest(message=message):
+                h = self.make_states(states)
+                h.panel.rte_states_count.set(count)
+                self.start(h)
+                self.assertEqual(h.showerror.call_args.args[0], "SHHV scan parameters")
+                self.assertIn(message, h.showerror.call_args.args[1])
+                h.askyesno.assert_not_called()
+                self.assertEqual((h.fake.sent, h.log), ([], []))
+        # A state with an angle needs the motor.
+        h = self.make_states([("10", "100", "2", "30")])
+        h.panel.rte_controllers["newmark"] = types.SimpleNamespace(connected=False, motion_may_run=False, label="Newmark stage")
+        self.start(h)
+        self.assertIn("for the angles of the states (or empty every Angle ° box: the stage is then not moved)", h.showerror.call_args.args[1])
+        self.assertEqual((h.fake.sent, h.log), ([], []))
+
+    def test_a_stage_or_field_that_fails_in_a_state_ends_the_scan_as_in_the_other_scans(self):
+        h = self.make_states([("0", "100", "2", "30"), ("90", "100", "-2", "30")])
+        h.move_hooks[90.0] = lambda: (_ for _ in ()).throw(app.NewmarkStageError("the stage did not answer"))
+        self.start(h)
+        self.assertIn("the stage did not answer", h.showerror.call_args.args[1])
+        self.assertEqual([r["state"] for r in self.rows(h)], ["1"])
+        self.assertEqual(len(h.fake.trains), 1, "state 2's pulse was not sent")
+        self.assertTrue([e for e in ete.RunLogBase.events(h) if e["event"] == "stage_failure"])
+        self.assertEqual(self.names(h, "6221", "kepco")[-3:], ete.ZEROED)
 
     def test_switch_loop_takes_start_end_step_and_loops_like_field(self):
         """User, 2026-11-26: "add a switch-loop in the scan mode below switch
@@ -874,9 +996,9 @@ class SwitchScanTests(SwitchScan):
     def test_start_refuses_a_pulse_beyond_the_limits_before_anything_is_sent(self):
         for span, width, pulses, message in (
                 (("0", "200", "100"), "30", "1", "6221 pulse currents must stay within +/-105 mA"),
-                (("-2", "2", "2"), "x", "1", "Pulse µs must be a number"),
-                (("-2", "2", "2"), "30", "0", "6221 pulse count must be between 1 and"),
-                (("-2", "2", "2"), "30", "1.5", "6221 pulse count must be an integer")):
+                (("-2", "2", "2"), "x", "1", 'State 1, Pulse µs: "x" is not a number'),
+                (("-2", "2", "2"), "30", "0", "State 1: 6221 pulse count must be between 1 and"),
+                (("-2", "2", "2"), "30", "1.5", "State 1: 6221 pulse count must be an integer")):
             with self.subTest(message=message):
                 h = self.make_switch(span=span, width=width, pulses=pulses)
                 self.start(h)

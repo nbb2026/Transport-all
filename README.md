@@ -115,6 +115,45 @@ Scan box (user, 2026-11-27):
   2026-11-28 was for Switch-OOP. Between the two tabs the loop, Settle s,
   Acquire s, the field, the pulse width and the harmonic follow the tab; a
   typed value stays. Pulse µs shows 1000 in the other tabs.
+- **The Switch scan runs states** (since 2026-11-28; Switch-loop and Switch2
+  are as before). The Scan box shows a table in place of "Pulses mA", "Outer
+  field G" and the Pulse µs box:
+
+  | | Angle ° | Field G | Pulse mA | Pulse µs |
+  | --- | --- | --- | --- | --- |
+  | 1 | 0 | 500 | 20 | 1000 |
+  | 2 | 0 | 500 | -20 | 1000 |
+  | 3 | 90 | 500 | 20 | 1000 |
+  | 4 | 90 | 500 | -20 | 1000 |
+
+  - **States** sets how many rows the scan has (1 to 12; a row past the first
+    four is empty until it is typed). The states run in their order, and
+    **Cycles** repeats the whole list.
+  - **One state:** the read current off; the stage to the state's angle; the
+    field to the state's; one write of **Pulses** pulses at the state's
+    current and width (0 mA sends none); the field back to 0 G; the read
+    current on again, the settling (5 time constants and Settle s) and the
+    read for Acquire s. So every state is read at 0 G, as MS-fourState reads,
+    and the stage only turns at 0 G with the read current off.
+  - **The read current**, its frequency, the compliance and the lock-ins are
+    the Settings boxes', unchanged by a state.
+  - **Angle °:** typed for every state, or left empty in every state. Empty
+    means the stage is not moved and need not be connected.
+  - **Each field**, 0 G too, is found on the LS475 as Set field finds it,
+    within the Tol. box, so a state with a field takes two field settings. A
+    state written at 0 G leaves the field alone.
+  - **Plots:** X and Y against the state's number, one line a cycle; X and Y
+    against time as before.
+  - **Saved:** besides the Switch scan's columns, `state`,
+    `write_target_field_g`, `write_field_g` and `write_current_a` (the LS475
+    field and the supply current the state was written at), and the stage's
+    columns when the states have angles. `measured_field_g` is the field at the
+    read, and `outer_target_field_g` is the 0 G every state is read at. The
+    run's settings list the states under `pulse.states`.
+  - The Pulse µs of the states follows the tab like the Pulse µs box: 30 on
+    Switch-IP, 1000 elsewhere, while it holds what the program put there.
+  - In a wide Scan box the table stands beside the scan's rows; in a narrow
+    one it is in the first row, beside the scan list.
 - **PHE** opens as the user's second figure of 2026-11-27: Angle+Field from 0
   to -360° in 5° steps, 1 loop, Settle s 0.5, Acquire s 5, no round trip,
   outer field 200 G (one field), read current 1.5 mA RMS, SR830-1 on the 1st

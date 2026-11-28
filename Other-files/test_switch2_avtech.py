@@ -68,7 +68,8 @@ class Switch2Page(unittest.TestCase):
             self.assertEqual([w.options.get("text") for w in pulse_row[:2] + pulse_row[3:4]], ["6221 write", "Pulse µs", "Pulses"])
             self.assertEqual([pulse_row[2].options["textvariable"], pulse_row[4].options["textvariable"]],
                              [panel.rte_pulse_width_us, panel.rte_pulse_count])
-            self.assertEqual(panel.ppms_plot_axis, "pulse")
+            # Since 2026-11-28 the Switch scan runs states: its plots are against the state's number.
+            self.assertEqual(panel.ppms_plot_axis, "state")
             self.assertIs(entry.parent.grid_removed, True)
             # Connected, it stays in every mode.
             panel.rte_controllers["avtech"].instrument = object()

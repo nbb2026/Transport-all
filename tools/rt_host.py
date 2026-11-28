@@ -403,6 +403,9 @@ SOURCE_REPLACE = (
     # - One state: the read current off; the stage to the state's angle (at the read field, 0 G); the field to the
     #   state's; the pulse; the field back to 0 G; the read current on again, the settling and the read.  The read
     #   current, its frequency, the compliance and the number of pulses a write are the Settings boxes', as before.
+    # - The pulse is logged when it is sent, before the field goes back (review, 2026-11-28: a Stop or a failure on
+    #   the way back must not leave a delivered pulse out of the run log); the row's event is "state_written".  A
+    #   state's field is held to the +/-7300 G of the page's typed fields, and Stop stage also holds the next pulse.
     # - The Angle boxes are filled for every state or for none: with none the stage is not moved and need not be
     #   connected, as in the Switch scan before.
     # - In the scan's own terms the read field is its one "outer" field, so the start, the end and the files of a
@@ -441,11 +444,13 @@ SOURCE_REPLACE = (
      "                               if outer and angle else\n                               self._rte_states_log_text(pulse, plan, settings) if switch and pulse.get('states') else\n                               f'; fields as typed: {rte_outer_values_text(outer, 50)} (± '\n"),
     ("        if pulse.get('source') == 'Avtech':\n            return self._rte_switch2_question(plan, outer, passes, limit, pulse, settings, settle_text, least_text, ramp_text)\n",
      "        if pulse.get('states'):\n            return self._rte_states_question(plan, passes, limit, pulse, settings, settle_text, least_text, ramp_text)\n        if pulse.get('source') == 'Avtech':\n            return self._rte_switch2_question(plan, outer, passes, limit, pulse, settings, settle_text, least_text, ramp_text)\n"),
+    ("                    self._rte_log('pulse', index=progress, step_index=step_index, loop=loop, point=point, **pulse_columns)\n",
+     "                    self._rte_log('state_written' if pulse.get('states') else 'pulse', index=progress, step_index=step_index, loop=loop, point=point, **pulse_columns)\n"),
     ('                    pulse_columns = self._rte_avtech_pulse(target, pulse) if avtech else self._rte_switch_pulse(target, pulse)\n',
      (
          "                    if pulse.get('states'):\n"
          '                        try:\n'
-         '                            pulse_columns = self._rte_state_write(supply, limit, pulse, point, target, progress)\n'
+         '                            pulse_columns = self._rte_state_write(supply, limit, pulse, loop, point, progress)\n'
          '                        except PPMSScanCancelled:\n'
          '                            raise\n'
          '                        except Exception as state_error:\n'
@@ -647,7 +652,7 @@ SOURCE_REPLACE = (
                       **self._rte_magnet_log(supply, supply.lakeshore_controller.reading if supply.lakeshore else None))
         self._rte_log_check()
         return reached
-    def _rte_state_write(self, supply, limit, pulse, point, target, progress):
+    def _rte_state_write(self, supply, limit, pulse, loop, point, progress):
         states = pulse['states']
         state = states[point - 1]
         self._rte_wait(0)
@@ -670,7 +675,12 @@ SOURCE_REPLACE = (
         if away:
             reached = self._rte_state_field(supply, state['field_g'], limit, progress, state, len(states), 'write')
             columns.update(write_field_g=float(reached['field_g']), write_current_a=float(reached['current_a']))
-        columns.update(self._rte_switch_pulse(target, dict(pulse, width_s=state['width_s'])))
+        if state['angle_deg'] is not None and self.rte_stage_stop_event.is_set():
+            raise PPMSScanCancelled(f"{self.ppms_page_name} stopped before the pulse of state {state['state']}: Stop stage was pressed; {self.rte_stage_where or 'stage not moved'}")
+        sent = self._rte_switch_pulse(state['pulse_ma'], dict(pulse, width_s=state['width_s']))
+        columns.update(sent)
+        self._rte_log('pulse', index=progress, loop=loop, point=point, state=state['state'], write_field_g=columns['write_field_g'], **sent)
+        self._rte_log_check()
         if away:
             self._rte_state_field(supply, SWITCH_STATE_READ_FIELD_G, limit, progress, state, len(states), 'read')
         return columns
@@ -780,6 +790,8 @@ def rte_switch_states(rows, count):
                 raise ValueError(f'State {number}, {title}: "{text}" is not a finite number')
             values.append(value + 0.0)
         angle, field, pulse_ma, width_us = values
+        if abs(field) > RTE_OUTER_FIELD_MAX_G:
+            raise ValueError(f'State {number}: fields must stay within +/-{RTE_OUTER_FIELD_MAX_G:g} G ({RTE_OUTER_FIELD_MAX_G:g} Oe); {field:g} G is outside')
         if angle is not None and abs(angle) > NEWMARK_CABLE_LIMIT_DEG:
             raise ValueError(f'State {number}: stage angles must stay within +/-{NEWMARK_CABLE_LIMIT_DEG:g}\u00b0 of the stage zero (the sample wires); {angle:g}\u00b0 is outside')
         states.append(dict(state=number, angle_deg=angle, field_g=field, pulse_ma=pulse_ma, width_s=width_us / 1e6))

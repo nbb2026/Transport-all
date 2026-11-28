@@ -9879,7 +9879,7 @@ class RTEPanel(PPMSPanel):
                       **self._rte_magnet_log(supply, supply.lakeshore_controller.reading if supply.lakeshore else None))
         self._rte_log_check()
         return reached
-    def _rte_state_write(self, supply, limit, pulse, point, target, progress):
+    def _rte_state_write(self, supply, limit, pulse, loop, point, progress):
         states = pulse['states']
         state = states[point - 1]
         self._rte_wait(0)
@@ -9902,7 +9902,12 @@ class RTEPanel(PPMSPanel):
         if away:
             reached = self._rte_state_field(supply, state['field_g'], limit, progress, state, len(states), 'write')
             columns.update(write_field_g=float(reached['field_g']), write_current_a=float(reached['current_a']))
-        columns.update(self._rte_switch_pulse(target, dict(pulse, width_s=state['width_s'])))
+        if state['angle_deg'] is not None and self.rte_stage_stop_event.is_set():
+            raise PPMSScanCancelled(f"{self.ppms_page_name} stopped before the pulse of state {state['state']}: Stop stage was pressed; {self.rte_stage_where or 'stage not moved'}")
+        sent = self._rte_switch_pulse(state['pulse_ma'], dict(pulse, width_s=state['width_s']))
+        columns.update(sent)
+        self._rte_log('pulse', index=progress, loop=loop, point=point, state=state['state'], write_field_g=columns['write_field_g'], **sent)
+        self._rte_log_check()
         if away:
             self._rte_state_field(supply, SWITCH_STATE_READ_FIELD_G, limit, progress, state, len(states), 'read')
         return columns
@@ -11851,7 +11856,7 @@ class RTEPanel(PPMSPanel):
                         self._rte_log_check()
                     if pulse.get('states'):
                         try:
-                            pulse_columns = self._rte_state_write(supply, limit, pulse, point, target, progress)
+                            pulse_columns = self._rte_state_write(supply, limit, pulse, loop, point, progress)
                         except PPMSScanCancelled:
                             raise
                         except Exception as state_error:
@@ -11859,7 +11864,7 @@ class RTEPanel(PPMSPanel):
                             raise
                     else:
                         pulse_columns = self._rte_avtech_pulse(target, pulse) if avtech else self._rte_switch_pulse(target, pulse)
-                    self._rte_log('pulse', index=progress, step_index=step_index, loop=loop, point=point, **pulse_columns)
+                    self._rte_log('state_written' if pulse.get('states') else 'pulse', index=progress, step_index=step_index, loop=loop, point=point, **pulse_columns)
                     self._rte_log_check()
                     self._rte_switch_read_on(point_settings)
                 elif angle:
@@ -12226,6 +12231,8 @@ def rte_switch_states(rows, count):
                 raise ValueError(f'State {number}, {title}: "{text}" is not a finite number')
             values.append(value + 0.0)
         angle, field, pulse_ma, width_us = values
+        if abs(field) > RTE_OUTER_FIELD_MAX_G:
+            raise ValueError(f'State {number}: fields must stay within +/-{RTE_OUTER_FIELD_MAX_G:g} G ({RTE_OUTER_FIELD_MAX_G:g} Oe); {field:g} G is outside')
         if angle is not None and abs(angle) > NEWMARK_CABLE_LIMIT_DEG:
             raise ValueError(f'State {number}: stage angles must stay within +/-{NEWMARK_CABLE_LIMIT_DEG:g}\u00b0 of the stage zero (the sample wires); {angle:g}\u00b0 is outside')
         states.append(dict(state=number, angle_deg=angle, field_g=field, pulse_ma=pulse_ma, width_s=width_us / 1e6))

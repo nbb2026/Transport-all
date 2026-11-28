@@ -626,6 +626,9 @@ class SwitchScanTests(SwitchScan):
         pulses = [e for e in events if e["event"] == "pulse"]
         self.assertEqual([(e["loop"], e["state"], e["pulse_current_ma"]) for e in pulses],
                          [(loop, state, value) for loop in (1, 2) for state, value in ((1, -2.0), (2, 2.0), (3, 0.0))])
+        # The pulse is in the log when it is sent, before the field goes back (review, 2026-11-28).
+        kinds = [(e["event"], e.get("purpose", "")) for e in events if e["event"] in ("pulse", "field_programmed", "state_written", "point_saved")]
+        self.assertEqual(kinds[1:6], [("field_programmed", "write"), ("pulse", ""), ("field_programmed", "read"), ("state_written", ""), ("point_saved", "")])
         fields = [e for e in events if e["event"] == "field_programmed"]
         self.assertEqual([(e.get("purpose", "start"), e["target_field_g"]) for e in fields],
                          [("start", 0.0)] + [("write", 100.0), ("read", 0.0), ("write", -50.0), ("read", 0.0)] * 2)
@@ -691,7 +694,10 @@ class SwitchScanTests(SwitchScan):
                 ([("", "100", "2", "30"), ("", "100", "x", "30")], "2", 'State 2, Pulse mA: "x" is not a number'),
                 ([("0", "100", "2", "30"), ("", "100", "2", "30")], "2", "Angle °: state 2 has no angle. Type the stage angle of every state, or empty every Angle ° box"),
                 ([("361", "100", "2", "30")], "1", "State 1: stage angles must stay within +/-360° of the stage zero (the sample wires); 361° is outside"),
-                ([("", "100", "2", "1")], "1", "State 1: 6221 pulse width must be between")):
+                ([("", "100", "2", "1")], "1", "State 1: 6221 pulse width must be between"),
+                # The page's cap on a typed field (review, 2026-11-28: 50000 typed for 500 must not start).
+                ([("", "50000", "2", "30")], "1", "State 1: fields must stay within +/-7300 G (7300 Oe); 50000 G is outside"),
+                ([("", "100", "200", "30")], "1", "6221 pulse currents must stay within +/-105 mA")):
             with self.subTest(message=message):
                 h = self.make_states(states)
                 h.panel.rte_states_count.set(count)
@@ -706,6 +712,52 @@ class SwitchScanTests(SwitchScan):
         self.start(h)
         self.assertIn("for the angles of the states (or empty every Angle ° box: the stage is then not moved)", h.showerror.call_args.args[1])
         self.assertEqual((h.fake.sent, h.log), ([], []))
+
+    def test_a_pulse_that_went_out_is_in_the_log_whatever_happens_on_the_way_back(self):
+        """Review, 2026-11-28: a Stop, or a field that fails, between the pulse and the return to 0 G left a
+        delivered pulse out of the run log.  It is logged the moment it is sent."""
+        for ending in ("stop", "field"):
+            with self.subTest(ending=ending):
+                h = self.make_states([("", "100", "2", "30"), ("", "100", "-2", "30")])
+                panel = h.panel
+                reach, sent = panel._rte_scan_reach_field, []
+
+                def back(supply, target, *rest, reach=reach, sent=sent, ending=ending, panel=panel, h=h):
+                    if target == 0.0 and len(h.fake.trains) == 1 and not sent:
+                        sent.append(True)
+                        if ending == "stop":
+                            panel.ppms_field_scan_stop_event.set()
+                        else:
+                            raise app.MagnetFieldError("the field did not answer")
+                    return reach(supply, target, *rest)
+                panel._rte_scan_reach_field = back
+                self.start(h)
+                self.assertEqual(self.rows(h), [], "no state was read")
+                self.assertEqual(len(h.fake.trains), 1)
+                pulses = [e for e in ete.RunLogBase.events(h) if e["event"] == "pulse"]
+                self.assertEqual([(e["state"], e["pulse_current_ma"], e["pulse_in_compliance"]) for e in pulses], [(1, 2.0, False)])
+                status = panel.ppms_field_scan_status_var.get()
+                self.assertTrue(status.startswith("Stopped; " if ending == "stop" else "Failed: the field did not answer"), status)
+                self.assertEqual(self.names(h, "6221", "kepco")[-3:], ete.ZEROED if ending == "stop" else self.names(h, "6221", "kepco")[-3:])
+                self.assertIn(("kepco", "force_off"), self.names(h, "kepco"))
+                self.assertEqual(h.fake.output, 0)
+
+    def test_stop_stage_holds_the_next_pulse(self):
+        """Review, 2026-11-28: Stop stage pressed while a state's field is being set ended the scan only at the
+        next state's move, after that state's pulse.  With angles, the pulse is not sent either."""
+        h = self.make_states([("0", "100", "2", "30"), ("90", "100", "-2", "30")])
+        panel = h.panel
+        reach = panel._rte_scan_reach_field
+
+        def during(supply, target, *rest):
+            if target == 100.0:
+                panel.rte_stage_stop_event.set()
+            return reach(supply, target, *rest)
+        panel._rte_scan_reach_field = during
+        self.start(h)
+        self.assertEqual((h.fake.trains, self.rows(h)), ([], []))
+        self.assertIn("stopped before the pulse of state 1: Stop stage was pressed", " ".join(str(e) for e in ete.RunLogBase.events(h)))
+        self.assertEqual(self.names(h, "6221", "kepco")[-3:], ete.ZEROED)
 
     def test_a_stage_or_field_that_fails_in_a_state_ends_the_scan_as_in_the_other_scans(self):
         h = self.make_states([("0", "100", "2", "30"), ("90", "100", "-2", "30")])

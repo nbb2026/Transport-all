@@ -132,6 +132,22 @@ To bring a later change of the main program here, run the tool again on the
 new `Transport_all.py`, then the tests. Do not edit `app.py` by hand: change
 the two steering files.
 
+## What the program saves, and under which names
+
+One rule since 2026-11-28 (the same on the four programs), as far as it goes
+here without renaming what the analysis reads:
+
+- A scan's run folder, live CSV and log are the run's recorder's alone.
+- Every name the program suggests or makes carries date, time and
+  microseconds (`%Y%m%d_%H%M%S_%f`); the recording's suggested `.avi` name had
+  date and time only.
+- The program log is suggested as `Transport_MOKE_log_<date>_<time>.txt`.
+- Not changed, though they follow three different patterns: the scans' own
+  end-of-scan files (`Current_Field_ROI_<stamp>.csv`,
+  `Voltage_vs_ROI_mean_<stamp>.csv`, `..._scan_parameters_<stamp>.log`, the
+  per-point `.tiff` images), the saved images (`<source>_<what>_<stamp>`) and
+  the CIDWM images (`CIDWM_<stamp>_<what>`). Analysis scripts read them.
+
 ## Tests
 
 Offline only; no instrument, port or VISA session is opened.

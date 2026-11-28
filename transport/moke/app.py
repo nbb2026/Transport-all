@@ -9899,7 +9899,7 @@ class CombinedControlApp:
             marker_mode = "MOKE"
         if self.keithley_scan_running:
             marker_mode = "2410"
-        timestamp = datetime_module.datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime_module.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         filename_prefix = f"Keithley{self._keithley_page_model()}" if marker_mode == "2410" else "MOKE"
         selected = filedialog.asksaveasfilename(
             parent=self.root,
@@ -14064,7 +14064,7 @@ class CombinedControlApp:
     def save_communication_log(self) -> None:
         path = filedialog.asksaveasfilename(
             parent=self.root, title="Save the full program log (including lines buffered while paused)",
-            initialfile=time.strftime("Transport_log_%Y%m%d_%H%M%S.txt"),
+            initialfile=time.strftime("Transport_MOKE_log_%Y%m%d_%H%M%S.txt"),
             defaultextension=".txt", filetypes=(("Text", "*.txt"),))
         if not path:
             return

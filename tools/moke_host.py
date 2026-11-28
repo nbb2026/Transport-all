@@ -33,8 +33,18 @@ EXTRA_IMPORTS = (
     'if not getattr(sys, "frozen", False) and {"site-packages", "dist-packages"} & set(Path(_PROGRAM_FILE).parts):',
     '    _PROGRAM_FILE = str(Path.cwd() / "Transport_MOKE.py")',
 )
+# How runs are saved in this program (user, 2026-11-28: "standardize the file-saving logic across all parts of the
+# code and ensure that the file and variable naming conventions are consistent", for RT, then "do the same for PPMS,
+# MOKE and FMR"): a run's folder, live CSV and log are the recorder's alone; a copy saved by hand is suggested under
+# the run's own name, <stem>_copy.csv, in the run folder; the program log is named after this program.  The names of
+# the files a scan makes, of the CSV's columns and of the log's fields are as they were: the analysis scripts read them.
+SOURCE_REPLACE = (
+    ('        timestamp = datetime_module.datetime.now().strftime("%Y%m%d_%H%M%S")\n',
+     '        timestamp = datetime_module.datetime.now().strftime("%Y%m%d_%H%M%S_%f")\n'),
+)
 REPLACE = {
     "'NH.ProfChen.MagnetoElectroOpticalMicrowaveTransport'": "'NH.ProfChen.TransportMOKE'",
+    '"Transport_log_%Y%m%d_%H%M%S.txt"': '"Transport_MOKE_log_%Y%m%d_%H%M%S.txt"',
 }
 
 MAIN_WINDOW_TITLE = "Transport_MOKE_NH"
